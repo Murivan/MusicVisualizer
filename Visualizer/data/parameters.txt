@@ -1,0 +1,21 @@
+# Music Visualizer parameters
+# Edit values after '=' and restart the application to apply them.
+
+# Window and display
+useFullScreen=true
+canvasWidth=1920
+canvasHeight=1080
+fps=30
+showVerboseUi=false
+
+# Audio analysis
+audioBufferSize=2048
+maxFftFrequency=20000.0
+frequencyMappingExponent=3.5
+audioBandMultiplier=0.1
+audioBloomMultiplier=1.0
+initialAudioSensitivity=2.0
+audioBaseIntensityScale=1.5
+baseImageSilenceFloor=0.2
+audioAttackTimeMs=50.0
+audioReleaseTimeMs=500.0

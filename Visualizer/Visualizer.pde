@@ -8,12 +8,14 @@ import ddf.minim.ugens.*;
 import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.Mixer;
 import java.util.ArrayList;
+import java.util.Properties;
 
 import javax.swing.JFileChooser;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.JOptionPane;
 import javax.swing.JDialog;
 import java.io.File;
+import java.io.InputStream;
 
 PImage baseImg;
 PImage[] solidMasks;
@@ -31,7 +33,8 @@ AudioInput in;
 FFT fft;
 boolean useAudioInput = false;
 String audioFileName = "";
-boolean isAudioReady = false;
+volatile boolean isAudioReady = false;
+boolean audioPlaybackStarted = false;
 boolean isCancelled = false;
 
 // Configuration variables
@@ -40,15 +43,21 @@ boolean useFullScreen = true; // Set to false to use custom canvas bounds below
 int canvasWidth = 1920;
 int canvasHeight = 1080;
 int fps = 30;
+boolean showVerboseUi = false;
 
 // Audio Configuration
 int audioBufferSize = 2048;           // Size of the audio buffer (also dictates FFT resolution)
 float maxFftFrequency = 20000.0;       // The maximum frequency (Hz) analyzed and mapped across the masks
+float frequencyMappingExponent = 3.5; // 1.0 is linear; higher values give lower frequencies more masks
 float audioBandMultiplier = 0.1;      // Base scaling factor for the real-time FFT band amplitudes
 float audioBloomMultiplier = 1.0;     // Indicates how much more the bloom reacts compared to solid masks
-float initialAudioSensitivity = 5.0;  // Initial value for the audio sensitivity slider
+float initialAudioSensitivity = 2.0;  // Initial value for the audio sensitivity slider
 float audioBaseIntensityScale = 1.5;  // How much the overall audio energy boosts the base image brightness
 float baseImageSilenceFloor = 0.2;    // The base image brightness (baseline) before audio boosts it
+float audioAttackTimeMs = 50.0;       // Time constant for colored areas to rise toward a higher audio level
+float audioReleaseTimeMs = 500.0;     // Time constant for colored areas to fade after their audio level falls
+float audioSampleRate = 0.0;
+int actualAudioBufferSize = audioBufferSize;
 
 
 // Different mappings can be obtained changing the order of the color names in this array.
@@ -60,17 +69,30 @@ String[] colorNames = {
 };
 float[] solidIntensities = new float[colorNames.length];
 float[] bloomIntensities = new float[colorNames.length];
+float[] releasedBandIntensities = new float[colorNames.length];
 float baseIntensity = baseImageSilenceFloor;
 float audioSensitivity = initialAudioSensitivity;
+int lastAudioResponseMs = 0;
 
 Slider[] solidSliders;
 Slider[] bloomSliders;
 Slider baseSlider;
 Slider audioSensSlider;
 
+void settings() {
+  loadParameters();
+  if (useFullScreen) {
+    fullScreen(P2D);
+  } else {
+    size(canvasWidth, canvasHeight, P2D);
+  }
+}
+
 void setup() {
-  fullScreen(P2D); // Enable GPU acceleration instead of CPU
   frameRate(fps);
+  baseIntensity = baseImageSilenceFloor;
+  audioSensitivity = initialAudioSensitivity;
+  actualAudioBufferSize = audioBufferSize;
   //smooth(4); // Reduced from 8 since Retina density already makes lines crisp
   //pixelDensity(displayDensity());
 
@@ -106,6 +128,85 @@ void setup() {
   thread("setupAudio");
 }
 
+void loadParameters() {
+  Properties parameters = new Properties();
+
+  try {
+    InputStream input = createInput("parameters.txt");
+    if (input == null) {
+      println("parameters.txt not found; using built-in defaults.");
+      return;
+    }
+    parameters.load(input);
+    input.close();
+  }
+  catch (Exception error) {
+    println("Could not read parameters.txt; using built-in defaults: " + error.getMessage());
+    return;
+  }
+
+  useFullScreen = getBooleanParameter(parameters, "useFullScreen", useFullScreen);
+  canvasWidth = getIntParameter(parameters, "canvasWidth", canvasWidth, 320, 16384);
+  canvasHeight = getIntParameter(parameters, "canvasHeight", canvasHeight, 240, 16384);
+  fps = getIntParameter(parameters, "fps", fps, 1, 240);
+  showVerboseUi = getBooleanParameter(parameters, "showVerboseUi", showVerboseUi);
+
+  int requestedBufferSize = getIntParameter(parameters, "audioBufferSize", audioBufferSize, 32, 65536);
+  if ((requestedBufferSize & (requestedBufferSize - 1)) == 0) {
+    audioBufferSize = requestedBufferSize;
+  } else {
+    println("Ignoring audioBufferSize: value must be a power of two.");
+  }
+
+  maxFftFrequency = getFloatParameter(parameters, "maxFftFrequency", maxFftFrequency, 1.0, 192000.0);
+  frequencyMappingExponent = getFloatParameter(parameters, "frequencyMappingExponent", frequencyMappingExponent, 0.1, 20.0);
+  audioBandMultiplier = getFloatParameter(parameters, "audioBandMultiplier", audioBandMultiplier, 0.0, 100.0);
+  audioBloomMultiplier = getFloatParameter(parameters, "audioBloomMultiplier", audioBloomMultiplier, 0.0, 100.0);
+  initialAudioSensitivity = getFloatParameter(parameters, "initialAudioSensitivity", initialAudioSensitivity, 0.0, 20.0);
+  audioBaseIntensityScale = getFloatParameter(parameters, "audioBaseIntensityScale", audioBaseIntensityScale, 0.0, 100.0);
+  baseImageSilenceFloor = getFloatParameter(parameters, "baseImageSilenceFloor", baseImageSilenceFloor, 0.0, 1.0);
+  audioAttackTimeMs = getFloatParameter(parameters, "audioAttackTimeMs", audioAttackTimeMs, 0.0, 60000.0);
+  audioReleaseTimeMs = getFloatParameter(parameters, "audioReleaseTimeMs", audioReleaseTimeMs, 0.0, 60000.0);
+}
+
+int getIntParameter(Properties parameters, String name, int defaultValue, int minimum, int maximum) {
+  String value = parameters.getProperty(name);
+  if (value == null) return defaultValue;
+
+  try {
+    return constrain(Integer.parseInt(value.trim()), minimum, maximum);
+  }
+  catch (NumberFormatException error) {
+    println("Ignoring invalid integer parameter " + name + "=" + value);
+    return defaultValue;
+  }
+}
+
+float getFloatParameter(Properties parameters, String name, float defaultValue, float minimum, float maximum) {
+  String value = parameters.getProperty(name);
+  if (value == null) return defaultValue;
+
+  try {
+    return constrain(Float.parseFloat(value.trim()), minimum, maximum);
+  }
+  catch (NumberFormatException error) {
+    println("Ignoring invalid numeric parameter " + name + "=" + value);
+    return defaultValue;
+  }
+}
+
+boolean getBooleanParameter(Properties parameters, String name, boolean defaultValue) {
+  String value = parameters.getProperty(name);
+  if (value == null) return defaultValue;
+
+  String normalizedValue = value.trim().toLowerCase();
+  if (normalizedValue.equals("true")) return true;
+  if (normalizedValue.equals("false")) return false;
+
+  println("Ignoring invalid boolean parameter " + name + "=" + value);
+  return defaultValue;
+}
+
 void draw() {
   if (isCancelled) {
     exit();
@@ -136,29 +237,37 @@ void draw() {
     baseIntensity = baseSlider.val + (currentLevel * audioBaseIntensityScale * audioSensitivity);
     baseIntensity = constrain(baseIntensity, 0.0, 1.0);
 
+    int currentAudioResponseMs = millis();
+    float elapsedMs = lastAudioResponseMs == 0 ? 1000.0 / fps : currentAudioResponseMs - lastAudioResponseMs;
+    lastAudioResponseMs = currentAudioResponseMs;
+    float attackAmount = audioAttackTimeMs <= 0.0 ? 1.0 : 1.0 - exp(-elapsedMs / audioAttackTimeMs);
+    float releaseAmount = audioReleaseTimeMs <= 0.0 ? 1.0 : 1.0 - exp(-elapsedMs / audioReleaseTimeMs);
+
     for (int i = 0; i < colorNames.length; i++) {
       float bandVal = 0.0;
       if (isAudioReady && fft != null) {
-        float maxFreq = maxFftFrequency;
-        int maxBin = fft.freqToIndex(maxFreq);
-        if (maxBin < colorNames.length) maxBin = colorNames.length;
-
-        int binsPerColor = maxBin / colorNames.length;
-        int startBin = i * binsPerColor;
-        int endBin = startBin + binsPerColor;
+        int maxBin = getMaxAnalysisBin();
+        int startBin = getBandStartBin(i, maxBin);
+        int endBin = getBandEndBin(i, maxBin);
 
         float sum = 0;
         for (int b = startBin; b < endBin; b++) {
           sum += fft.getBand(b);
         }
-        bandVal = (sum / binsPerColor) * audioBandMultiplier * audioSensitivity;
+        bandVal = (sum / (endBin - startBin)) * audioBandMultiplier * audioSensitivity;
+      }
+
+      if (bandVal >= releasedBandIntensities[i]) {
+        releasedBandIntensities[i] = lerp(releasedBandIntensities[i], bandVal, attackAmount);
+      } else {
+        releasedBandIntensities[i] = lerp(releasedBandIntensities[i], bandVal, releaseAmount);
       }
 
       solidSliders[i].update(mouseX, mouseY, mPressed);
-      solidIntensities[i] = solidSliders[i].val + bandVal;
+      solidIntensities[i] = solidSliders[i].val + releasedBandIntensities[i];
 
       bloomSliders[i].update(mouseX, mouseY, mPressed);
-      bloomIntensities[i] = bloomSliders[i].val + bandVal * audioBloomMultiplier;
+      bloomIntensities[i] = bloomSliders[i].val + releasedBandIntensities[i] * audioBloomMultiplier;
     }
   }
 
@@ -203,17 +312,84 @@ void draw() {
     text("window_base.png not found in data folder or sketch folder.", width/2, height/2);
   }
 
-  drawStatusOverlay();
+  startAudioPlaybackIfReady();
 
-  // Draw sliders
-  if (solidSliders != null && bloomSliders != null && baseSlider != null && audioSensSlider != null && allMasksReady && isAudioReady) {
-    audioSensSlider.draw();
-    baseSlider.draw();
-    for (int i = 0; i < colorNames.length; i++) {
-      solidSliders[i].draw();
-      bloomSliders[i].draw();
+  if (showVerboseUi) {
+    drawStatusOverlay();
+
+    if (solidSliders != null && bloomSliders != null && baseSlider != null && audioSensSlider != null && allMasksReady && isAudioReady) {
+      audioSensSlider.draw();
+      baseSlider.draw();
+      for (int i = 0; i < colorNames.length; i++) {
+        solidSliders[i].draw();
+        bloomSliders[i].draw();
+      }
+      drawBandMapping();
     }
   }
+}
+
+void keyPressed() {
+  if (key == 'v' || key == 'V') {
+    showVerboseUi = !showVerboseUi;
+  }
+}
+
+void startAudioPlaybackIfReady() {
+  if (allMasksReady && isAudioReady && !useAudioInput && track != null && !audioPlaybackStarted) {
+    track.loop();
+    audioPlaybackStarted = true;
+    lastAudioResponseMs = millis();
+  }
+}
+
+int getMaxAnalysisBin() {
+  float binWidth = audioSampleRate / actualAudioBufferSize;
+  float effectiveMaxFrequency = min(maxFftFrequency, audioSampleRate * 0.5);
+  int maxBin = ceil(effectiveMaxFrequency / binWidth);
+  return constrain(maxBin, colorNames.length, fft.specSize());
+}
+
+int getBandBoundaryBin(int boundaryIndex, int maxBin) {
+  float normalizedPosition = boundaryIndex / (float)colorNames.length;
+  int distributableBins = maxBin - colorNames.length;
+  return boundaryIndex + round(distributableBins * pow(normalizedPosition, frequencyMappingExponent));
+}
+
+int getBandStartBin(int maskIndex, int maxBin) {
+  return getBandBoundaryBin(maskIndex, maxBin);
+}
+
+int getBandEndBin(int maskIndex, int maxBin) {
+  return getBandBoundaryBin(maskIndex + 1, maxBin);
+}
+
+String formatFrequency(float frequency) {
+  if (frequency >= 1000.0) {
+    return nf(frequency / 1000.0, 1, 2) + " kHz";
+  }
+  return nf(frequency, 1, 0) + " Hz";
+}
+
+void drawBandMapping() {
+  int maxBin = getMaxAnalysisBin();
+  float binWidth = audioSampleRate / actualAudioBufferSize;
+  float effectiveMaxFrequency = min(maxFftFrequency, audioSampleRate * 0.5);
+  float x = 390;
+
+  pushStyle();
+  fill(255);
+  textAlign(LEFT, CENTER);
+  textSize(14);
+  text("FFT BANDS — " + nf(audioSampleRate, 1, 0) + " Hz, " + actualAudioBufferSize + " samples, max " + formatFrequency(effectiveMaxFrequency) + ", curve " + nf(frequencyMappingExponent, 1, 2), x, 72);
+
+  for (int i = 0; i < colorNames.length; i++) {
+    float startFrequency = getBandStartBin(i, maxBin) * binWidth;
+    float endFrequency = min(getBandEndBin(i, maxBin) * binWidth, effectiveMaxFrequency);
+    float y = 112.5 + i * 55;
+    text(colorNames[i].toUpperCase() + ": " + formatFrequency(startFrequency) + " - " + formatFrequency(endFrequency), x, y);
+  }
+  popStyle();
 }
 
 void drawStatusOverlay() {
@@ -443,12 +619,15 @@ void setupAudio() {
     }
 
     in = minim.getLineIn(inputType, audioBufferSize);
-    fft = new FFT(in.bufferSize(), in.sampleRate());
+    actualAudioBufferSize = in.bufferSize();
+    audioSampleRate = in.sampleRate();
+    fft = new FFT(actualAudioBufferSize, audioSampleRate);
   } else {
     track = minim.loadFile(audioFileName, audioBufferSize);
     if (track != null) {
-      track.loop();
-      fft = new FFT(track.bufferSize(), track.sampleRate());
+      actualAudioBufferSize = track.bufferSize();
+      audioSampleRate = track.sampleRate();
+      fft = new FFT(actualAudioBufferSize, audioSampleRate);
     } else {
       isCancelled = true;
       surface.setVisible(true);
