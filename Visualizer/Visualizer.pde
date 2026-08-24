@@ -20,6 +20,7 @@ import java.io.InputStream;
 PImage baseImg;
 PImage[] solidMasks;
 PImage[] bloomMasks;
+PShader spatialRevealShader;
 volatile boolean masksDecoded = false;
 volatile int masksDecodedCount = 0;
 int warmupIndex = 0;
@@ -59,6 +60,16 @@ float audioReleaseTimeMs = 500.0;     // Time constant for colored areas to fade
 float audioSampleRate = 0.0;
 int actualAudioBufferSize = audioBufferSize;
 
+// Spatial Reveal Mode
+boolean startInSpatialRevealMode = false;
+float spatialEnergyMultiplier = 1.0;
+float spatialMinimumRadius = 0.04;
+float spatialMaximumRadius = 0.85;
+float spatialEdgeFeather = 0.035;
+float spatialMotionUpdateIntervalMs = 300.0;
+float spatialBrownianStep = 0.12;
+float spatialMotionSmoothingTimeMs = 220.0;
+
 
 // Different mappings can be obtained changing the order of the color names in this array.
 String[] colorNames = {
@@ -74,10 +85,27 @@ float baseIntensity = baseImageSilenceFloor;
 float audioSensitivity = initialAudioSensitivity;
 int lastAudioResponseMs = 0;
 
+boolean spatialRevealMode = false;
+float spatialEnergy = 0.0;
+float spatialRevealRadius = 0.0;
+float spatialPositionX = 0.5;
+float spatialPositionY = 0.5;
+float spatialTargetX = 0.5;
+float spatialTargetY = 0.5;
+int lastSpatialMotionUpdateMs = 0;
+
 Slider[] solidSliders;
 Slider[] bloomSliders;
 Slider baseSlider;
 Slider audioSensSlider;
+
+static
+{
+  // Forces 1:1 pixel rendering by disabling OS-level DPI scaling
+
+  System.setProperty("sun.java2d.uiScale", "1.01"); // If this is 1.0 it does NOT work!
+  //System.setProperty("sun.java2d.DPIscaling", "false"); // No effect.
+}
 
 void settings() {
   loadParameters();
@@ -93,11 +121,14 @@ void setup() {
   baseIntensity = baseImageSilenceFloor;
   audioSensitivity = initialAudioSensitivity;
   actualAudioBufferSize = audioBufferSize;
+  spatialRevealMode = startInSpatialRevealMode;
+  spatialRevealRadius = spatialMinimumRadius;
   //smooth(4); // Reduced from 8 since Retina density already makes lines crisp
   //pixelDensity(displayDensity());
 
   // Load the base image immediately, then decode every mask in a background thread.
   baseImg = loadImage("window_base.png");
+  spatialRevealShader = loadShader("spatial_reveal.glsl");
   solidMasks = new PImage[colorNames.length];
   bloomMasks = new PImage[colorNames.length];
 
@@ -167,6 +198,15 @@ void loadParameters() {
   baseImageSilenceFloor = getFloatParameter(parameters, "baseImageSilenceFloor", baseImageSilenceFloor, 0.0, 1.0);
   audioAttackTimeMs = getFloatParameter(parameters, "audioAttackTimeMs", audioAttackTimeMs, 0.0, 60000.0);
   audioReleaseTimeMs = getFloatParameter(parameters, "audioReleaseTimeMs", audioReleaseTimeMs, 0.0, 60000.0);
+
+  startInSpatialRevealMode = getBooleanParameter(parameters, "startInSpatialRevealMode", startInSpatialRevealMode);
+  spatialEnergyMultiplier = getFloatParameter(parameters, "spatialEnergyMultiplier", spatialEnergyMultiplier, 0.0, 100.0);
+  spatialMinimumRadius = getFloatParameter(parameters, "spatialMinimumRadius", spatialMinimumRadius, 0.0, 2.0);
+  spatialMaximumRadius = getFloatParameter(parameters, "spatialMaximumRadius", spatialMaximumRadius, spatialMinimumRadius, 2.0);
+  spatialEdgeFeather = getFloatParameter(parameters, "spatialEdgeFeather", spatialEdgeFeather, 0.0, 0.5);
+  spatialMotionUpdateIntervalMs = getFloatParameter(parameters, "spatialMotionUpdateIntervalMs", spatialMotionUpdateIntervalMs, 1.0, 60000.0);
+  spatialBrownianStep = getFloatParameter(parameters, "spatialBrownianStep", spatialBrownianStep, 0.0, 1.0);
+  spatialMotionSmoothingTimeMs = getFloatParameter(parameters, "spatialMotionSmoothingTimeMs", spatialMotionSmoothingTimeMs, 0.0, 60000.0);
 }
 
 int getIntParameter(Properties parameters, String name, int defaultValue, int minimum, int maximum) {
@@ -269,6 +309,8 @@ void draw() {
       bloomSliders[i].update(mouseX, mouseY, mPressed);
       bloomIntensities[i] = bloomSliders[i].val + releasedBandIntensities[i] * audioBloomMultiplier;
     }
+
+    updateSpatialReveal(currentLevel, currentAudioResponseMs, elapsedMs, attackAmount, releaseAmount);
   }
 
   if (baseImg != null) {
@@ -286,6 +328,15 @@ void draw() {
     if (allMasksReady) {
       blendMode(ADD);
 
+      boolean useSpatialShader = spatialRevealMode && spatialRevealShader != null;
+      if (useSpatialShader) {
+        spatialRevealShader.set("revealCenter", spatialPositionX, spatialPositionY);
+        spatialRevealShader.set("revealRadius", spatialRevealRadius);
+        spatialRevealShader.set("revealFeather", spatialEdgeFeather);
+        spatialRevealShader.set("imageAspect", imgW / imgH);
+        shader(spatialRevealShader);
+      }
+
       for (int i = 0; i < colorNames.length; i++) {
         float sInt = solidIntensities[i];
         while (sInt > 0) {
@@ -300,6 +351,10 @@ void draw() {
           image(bloomMasks[i], imgX, imgY, imgW, imgH);
           bInt -= 1.0;
         }
+      }
+
+      if (useSpatialShader) {
+        resetShader();
       }
     }
 
@@ -332,7 +387,36 @@ void draw() {
 void keyPressed() {
   if (key == 'v' || key == 'V') {
     showVerboseUi = !showVerboseUi;
+  } else if (key == 'm' || key == 'M') {
+    spatialRevealMode = !spatialRevealMode;
+    if (spatialRevealMode) {
+      lastSpatialMotionUpdateMs = millis() - round(spatialMotionUpdateIntervalMs);
+    }
   }
+}
+
+void updateSpatialReveal(float currentLevel, int currentMs, float elapsedMs, float attackAmount, float releaseAmount) {
+  float targetEnergy = constrain(currentLevel * audioSensitivity * spatialEnergyMultiplier, 0.0, 1.0);
+  float energyAmount = targetEnergy >= spatialEnergy ? attackAmount : releaseAmount;
+  spatialEnergy = lerp(spatialEnergy, targetEnergy, energyAmount);
+
+  float minimumArea = spatialMinimumRadius * spatialMinimumRadius;
+  float maximumArea = spatialMaximumRadius * spatialMaximumRadius;
+  spatialRevealRadius = sqrt(lerp(minimumArea, maximumArea, spatialEnergy));
+
+  if (!spatialRevealMode) return;
+
+  if (lastSpatialMotionUpdateMs == 0 || currentMs - lastSpatialMotionUpdateMs >= spatialMotionUpdateIntervalMs) {
+    spatialTargetX = constrain(spatialTargetX + randomGaussian() * spatialBrownianStep, 0.0, 1.0);
+    spatialTargetY = constrain(spatialTargetY + randomGaussian() * spatialBrownianStep, 0.0, 1.0);
+    lastSpatialMotionUpdateMs = currentMs;
+  }
+
+  float motionAmount = spatialMotionSmoothingTimeMs <= 0.0
+    ? 1.0
+    : 1.0 - exp(-elapsedMs / spatialMotionSmoothingTimeMs);
+  spatialPositionX = lerp(spatialPositionX, spatialTargetX, motionAmount);
+  spatialPositionY = lerp(spatialPositionY, spatialTargetY, motionAmount);
 }
 
 void startAudioPlaybackIfReady() {
@@ -401,8 +485,12 @@ void drawStatusOverlay() {
   } else {
     maskStatus = "ALL MASKS ACTIVE";
   }
+  maskStatus += " | MODE: " + (spatialRevealMode ? "SPATIAL" : "FULL") + " (M)";
 
   String fpsStatus = "FPS: " + nf(frameRate, 0, 1);
+  if (spatialRevealMode) {
+    fpsStatus += " | ENERGY: " + nf(spatialEnergy * 100.0, 0, 0) + "%";
+  }
   float padding = 18;
   float boxHeight = 44;
 
@@ -698,4 +786,3 @@ String promptForMixer(String[] optionsArray) {
   if (selectedValue == JOptionPane.UNINITIALIZED_VALUE || selectedValue == null) return null;
   return (String) selectedValue;
 }
-

@@ -19,3 +19,13 @@ audioBaseIntensityScale=0.5
 baseImageSilenceFloor=0.0
 audioAttackTimeMs=50.0
 audioReleaseTimeMs=500.0
+
+# Spatial reveal mode (toggle at runtime with M)
+startInSpatialRevealMode=false
+spatialEnergyMultiplier=1.0
+spatialMinimumRadius=0.04
+spatialMaximumRadius=0.85
+spatialEdgeFeather=0.035
+spatialMotionUpdateIntervalMs=300.0
+spatialBrownianStep=0.12
+spatialMotionSmoothingTimeMs=220.0
