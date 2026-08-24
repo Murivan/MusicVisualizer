@@ -61,14 +61,16 @@ float audioSampleRate = 0.0;
 int actualAudioBufferSize = audioBufferSize;
 
 // Spatial Reveal Mode
-boolean startInSpatialRevealMode = false;
-float spatialEnergyMultiplier = 1.0;
-float spatialMinimumRadius = 0.04;
-float spatialMaximumRadius = 0.85;
-float spatialEdgeFeather = 0.035;
-float spatialMotionUpdateIntervalMs = 300.0;
-float spatialBrownianStep = 0.12;
-float spatialMotionSmoothingTimeMs = 220.0;
+boolean startInSpatialRevealMode = false;       // Start with moving spotlights instead of full-mask illumination
+float spatialEnergyMultiplier = 1.0;            // Scales audio level before converting it to spotlight area
+float spatialMinimumRadius = 0.04;              // Quiet-sound radius as a fraction of the image height
+float spatialMaximumRadius = 0.5;               // Loud-sound radius; 0.5 covers the circular image when centered
+float spatialEdgeFeather = 0.035;               // Width of the soft spotlight edge in image-height units
+float spatialMotionUpdateIntervalMs = 1000.0;    // Milliseconds between new Brownian motion targets
+float spatialBrownianStep = 0.05;               // Maximum typical target movement as a fraction of image size
+float spatialMotionSmoothingTimeMs = 500.0;     // Time constant used to glide toward each new target
+boolean spatialIndependentMaskPositions = true; // Give each color mask its own moving spotlight
+boolean spatialKeepCirclesInsideImage = true;   // Recenter and limit spotlights so edges never clip them
 
 
 // Different mappings can be obtained changing the order of the color names in this array.
@@ -88,10 +90,10 @@ int lastAudioResponseMs = 0;
 boolean spatialRevealMode = false;
 float spatialEnergy = 0.0;
 float spatialRevealRadius = 0.0;
-float spatialPositionX = 0.5;
-float spatialPositionY = 0.5;
-float spatialTargetX = 0.5;
-float spatialTargetY = 0.5;
+float[] spatialPositionX = new float[colorNames.length];
+float[] spatialPositionY = new float[colorNames.length];
+float[] spatialTargetX = new float[colorNames.length];
+float[] spatialTargetY = new float[colorNames.length];
 int lastSpatialMotionUpdateMs = 0;
 
 Slider[] solidSliders;
@@ -149,6 +151,10 @@ void setup() {
   for (int i = 0; i < colorNames.length; i++) {
     solidIntensities[i] = 0.0; // Default solid intensity
     bloomIntensities[i] = 0.0;  // Default bloom intensity
+    spatialPositionX[i] = 0.5;
+    spatialPositionY[i] = 0.5;
+    spatialTargetX[i] = 0.5;
+    spatialTargetY[i] = 0.5;
 
     int yBase = 100 + i * 55;
     solidSliders[i] = new Slider(colorNames[i].toUpperCase() + " SOLID", 20, yBase, 150, 12, 0.0, 5.0, solidIntensities[i]);
@@ -207,6 +213,8 @@ void loadParameters() {
   spatialMotionUpdateIntervalMs = getFloatParameter(parameters, "spatialMotionUpdateIntervalMs", spatialMotionUpdateIntervalMs, 1.0, 60000.0);
   spatialBrownianStep = getFloatParameter(parameters, "spatialBrownianStep", spatialBrownianStep, 0.0, 1.0);
   spatialMotionSmoothingTimeMs = getFloatParameter(parameters, "spatialMotionSmoothingTimeMs", spatialMotionSmoothingTimeMs, 0.0, 60000.0);
+  spatialIndependentMaskPositions = getBooleanParameter(parameters, "spatialIndependentMaskPositions", spatialIndependentMaskPositions);
+  spatialKeepCirclesInsideImage = getBooleanParameter(parameters, "spatialKeepCirclesInsideImage", spatialKeepCirclesInsideImage);
 }
 
 int getIntParameter(Properties parameters, String name, int defaultValue, int minimum, int maximum) {
@@ -329,15 +337,16 @@ void draw() {
       blendMode(ADD);
 
       boolean useSpatialShader = spatialRevealMode && spatialRevealShader != null;
-      if (useSpatialShader) {
-        spatialRevealShader.set("revealCenter", spatialPositionX, spatialPositionY);
-        spatialRevealShader.set("revealRadius", spatialRevealRadius);
-        spatialRevealShader.set("revealFeather", spatialEdgeFeather);
-        spatialRevealShader.set("imageAspect", imgW / imgH);
-        shader(spatialRevealShader);
-      }
 
       for (int i = 0; i < colorNames.length; i++) {
+        if (useSpatialShader) {
+          spatialRevealShader.set("revealCenter", spatialPositionX[i], spatialPositionY[i]);
+          spatialRevealShader.set("revealRadius", getSpatialRevealRadiusForMask(i));
+          spatialRevealShader.set("revealFeather", spatialEdgeFeather);
+          spatialRevealShader.set("imageAspect", imgW / imgH);
+          shader(spatialRevealShader);
+        }
+
         float sInt = solidIntensities[i];
         while (sInt > 0) {
           tint(255, min(255, 255 * sInt));
@@ -351,10 +360,10 @@ void draw() {
           image(bloomMasks[i], imgX, imgY, imgW, imgH);
           bInt -= 1.0;
         }
-      }
 
-      if (useSpatialShader) {
-        resetShader();
+        if (useSpatialShader) {
+          resetShader();
+        }
       }
     }
 
@@ -404,19 +413,61 @@ void updateSpatialReveal(float currentLevel, int currentMs, float elapsedMs, flo
   float maximumArea = spatialMaximumRadius * spatialMaximumRadius;
   spatialRevealRadius = sqrt(lerp(minimumArea, maximumArea, spatialEnergy));
 
-  if (!spatialRevealMode) return;
-
-  if (lastSpatialMotionUpdateMs == 0 || currentMs - lastSpatialMotionUpdateMs >= spatialMotionUpdateIntervalMs) {
-    spatialTargetX = constrain(spatialTargetX + randomGaussian() * spatialBrownianStep, 0.0, 1.0);
-    spatialTargetY = constrain(spatialTargetY + randomGaussian() * spatialBrownianStep, 0.0, 1.0);
-    lastSpatialMotionUpdateMs = currentMs;
+  float imageAspect = imgH > 0.0 ? imgW / imgH : 1.0;
+  if (spatialKeepCirclesInsideImage) {
+    spatialRevealRadius = min(spatialRevealRadius, min(0.5, imageAspect * 0.5));
   }
 
+  if (!spatialRevealMode) return;
+
+  boolean updateTargets = lastSpatialMotionUpdateMs == 0
+    || currentMs - lastSpatialMotionUpdateMs >= spatialMotionUpdateIntervalMs;
   float motionAmount = spatialMotionSmoothingTimeMs <= 0.0
     ? 1.0
     : 1.0 - exp(-elapsedMs / spatialMotionSmoothingTimeMs);
-  spatialPositionX = lerp(spatialPositionX, spatialTargetX, motionAmount);
-  spatialPositionY = lerp(spatialPositionY, spatialTargetY, motionAmount);
+  int movingPositionCount = spatialIndependentMaskPositions ? colorNames.length : 1;
+
+  float horizontalMargin = spatialKeepCirclesInsideImage ? spatialRevealRadius / imageAspect : 0.0;
+  float verticalMargin = spatialKeepCirclesInsideImage ? spatialRevealRadius : 0.0;
+
+  for (int i = 0; i < movingPositionCount; i++) {
+    if (updateTargets) {
+      spatialTargetX[i] += randomGaussian() * spatialBrownianStep;
+      spatialTargetY[i] += randomGaussian() * spatialBrownianStep;
+    }
+
+    spatialTargetX[i] = constrain(spatialTargetX[i], horizontalMargin, 1.0 - horizontalMargin);
+    spatialTargetY[i] = constrain(spatialTargetY[i], verticalMargin, 1.0 - verticalMargin);
+    spatialPositionX[i] = lerp(spatialPositionX[i], spatialTargetX[i], motionAmount);
+    spatialPositionY[i] = lerp(spatialPositionY[i], spatialTargetY[i], motionAmount);
+  }
+
+  if (!spatialIndependentMaskPositions) {
+    for (int i = 1; i < colorNames.length; i++) {
+      spatialPositionX[i] = spatialPositionX[0];
+      spatialPositionY[i] = spatialPositionY[0];
+      spatialTargetX[i] = spatialTargetX[0];
+      spatialTargetY[i] = spatialTargetY[0];
+    }
+  }
+
+  if (updateTargets) {
+    lastSpatialMotionUpdateMs = currentMs;
+  }
+}
+
+float getSpatialRevealRadiusForMask(int maskIndex) {
+  if (!spatialKeepCirclesInsideImage || imgH <= 0.0) {
+    return spatialRevealRadius;
+  }
+
+  float imageAspect = imgW / imgH;
+  float distanceToLeft = spatialPositionX[maskIndex] * imageAspect;
+  float distanceToRight = (1.0 - spatialPositionX[maskIndex]) * imageAspect;
+  float distanceToTop = spatialPositionY[maskIndex];
+  float distanceToBottom = 1.0 - spatialPositionY[maskIndex];
+  float edgeLimitedRadius = min(min(distanceToLeft, distanceToRight), min(distanceToTop, distanceToBottom));
+  return max(0.0, min(spatialRevealRadius, edgeLimitedRadius));
 }
 
 void startAudioPlaybackIfReady() {

@@ -21,11 +21,22 @@ audioAttackTimeMs=50.0
 audioReleaseTimeMs=500.0
 
 # Spatial reveal mode (toggle at runtime with M)
+# Start in spatial mode instead of full-mask mode.
 startInSpatialRevealMode=false
+# Scales audio level before it is converted into spotlight area.
 spatialEnergyMultiplier=1.0
+# Quiet and loud radii, measured as fractions of image height.
 spatialMinimumRadius=0.04
-spatialMaximumRadius=0.85
-spatialEdgeFeather=0.035
-spatialMotionUpdateIntervalMs=300.0
-spatialBrownianStep=0.12
-spatialMotionSmoothingTimeMs=220.0
+spatialMaximumRadius=0.5
+# Width of the spotlight's soft edge, measured in image-height units.
+spatialEdgeFeather=0.100
+# Milliseconds between new Brownian motion targets.
+spatialMotionUpdateIntervalMs=1000.0
+# Scale of each random target displacement relative to image size.
+spatialBrownianStep=0.05
+# Millisecond time constant for gliding toward a new target; 0 moves immediately.
+spatialMotionSmoothingTimeMs=500.0
+# Use a separate moving spotlight for every color mask.
+spatialIndependentMaskPositions=true
+# Keep each spotlight circular by preventing clipping at image edges.
+spatialKeepCirclesInsideImage=true
