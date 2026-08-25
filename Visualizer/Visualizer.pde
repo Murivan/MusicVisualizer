@@ -103,10 +103,11 @@ Slider audioSensSlider;
 
 static
 {
-  // Forces 1:1 pixel rendering by disabling OS-level DPI scaling
-
-  System.setProperty("sun.java2d.uiScale", "1.01"); // If this is 1.0 it does NOT work!
-  //System.setProperty("sun.java2d.DPIscaling", "false"); // No effect.
+  String operatingSystem = System.getProperty("os.name", "").toLowerCase();
+  if (operatingSystem.startsWith("windows")) {
+    // Windows requires a non-1.0 value to force 1:1 pixel rendering.
+    System.setProperty("sun.java2d.uiScale", "1.01");
+  }
 }
 
 void settings() {
