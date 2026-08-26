@@ -65,9 +65,9 @@ boolean startInSpatialRevealMode = false;       // Start with moving spotlights 
 float spatialEnergyMultiplier = 1.0;            // Scales audio level before converting it to spotlight area
 float spatialMinimumRadius = 0.04;              // Quiet-sound radius as a fraction of the image height
 float spatialMaximumRadius = 0.5;               // Loud-sound radius; 0.5 covers the circular image when centered
-float spatialEdgeFeather = 0.035;               // Width of the soft spotlight edge in image-height units
-float spatialMotionUpdateIntervalMs = 1000.0;    // Milliseconds between new Brownian motion targets
-float spatialBrownianStep = 0.05;               // Maximum typical target movement as a fraction of image size
+float spatialEdgeFeatherProportion = 0.25;       // Fraction of each spotlight radius used for its soft edge
+float spatialMotionUpdateIntervalMs = 1000.0;   // Milliseconds between new Brownian motion targets
+float spatialBrownianStep = 0.05;               // Brownian target-step scale as a fraction of image size
 float spatialMotionSmoothingTimeMs = 500.0;     // Time constant used to glide toward each new target
 boolean spatialIndependentMaskPositions = true; // Give each color mask its own moving spotlight
 boolean spatialKeepCirclesInsideImage = true;   // Recenter and limit spotlights so edges never clip them
@@ -210,7 +210,7 @@ void loadParameters() {
   spatialEnergyMultiplier = getFloatParameter(parameters, "spatialEnergyMultiplier", spatialEnergyMultiplier, 0.0, 100.0);
   spatialMinimumRadius = getFloatParameter(parameters, "spatialMinimumRadius", spatialMinimumRadius, 0.0, 2.0);
   spatialMaximumRadius = getFloatParameter(parameters, "spatialMaximumRadius", spatialMaximumRadius, spatialMinimumRadius, 2.0);
-  spatialEdgeFeather = getFloatParameter(parameters, "spatialEdgeFeather", spatialEdgeFeather, 0.0, 0.5);
+  spatialEdgeFeatherProportion = getFloatParameter(parameters, "spatialEdgeFeatherProportion", spatialEdgeFeatherProportion, 0.0, 1.0);
   spatialMotionUpdateIntervalMs = getFloatParameter(parameters, "spatialMotionUpdateIntervalMs", spatialMotionUpdateIntervalMs, 1.0, 60000.0);
   spatialBrownianStep = getFloatParameter(parameters, "spatialBrownianStep", spatialBrownianStep, 0.0, 1.0);
   spatialMotionSmoothingTimeMs = getFloatParameter(parameters, "spatialMotionSmoothingTimeMs", spatialMotionSmoothingTimeMs, 0.0, 60000.0);
@@ -341,9 +341,10 @@ void draw() {
 
       for (int i = 0; i < colorNames.length; i++) {
         if (useSpatialShader) {
+          float revealRadius = getSpatialRevealRadiusForMask(i);
           spatialRevealShader.set("revealCenter", spatialPositionX[i], spatialPositionY[i]);
-          spatialRevealShader.set("revealRadius", getSpatialRevealRadiusForMask(i));
-          spatialRevealShader.set("revealFeather", spatialEdgeFeather);
+          spatialRevealShader.set("revealRadius", revealRadius);
+          spatialRevealShader.set("revealFeather", revealRadius * spatialEdgeFeatherProportion);
           spatialRevealShader.set("imageAspect", imgW / imgH);
           shader(spatialRevealShader);
         }

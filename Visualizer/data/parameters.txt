@@ -10,12 +10,12 @@ showVerboseUi=false
 
 # Audio analysis
 audioBufferSize=2048
-maxFftFrequency=20000.0
+maxFftFrequency=16000.0
 frequencyMappingExponent=3.5
 audioBandMultiplier=0.1
 audioBloomMultiplier=1.0
 initialAudioSensitivity=2.0
-audioBaseIntensityScale=0.5
+audioBaseIntensityScale=0.25
 baseImageSilenceFloor=0.0
 audioAttackTimeMs=50.0
 audioReleaseTimeMs=500.0
@@ -28,15 +28,15 @@ spatialEnergyMultiplier=1.0
 # Quiet and loud radii, measured as fractions of image height.
 spatialMinimumRadius=0.04
 spatialMaximumRadius=0.5
-# Width of the spotlight's soft edge, measured in image-height units.
-spatialEdgeFeather=0.100
+# Fraction of each spotlight radius used for fading: 0 is sharp, 1 fades from center to edge.
+spatialEdgeFeatherProportion=0.35
 # Milliseconds between new Brownian motion targets.
 spatialMotionUpdateIntervalMs=1000.0
 # Scale of each random target displacement relative to image size.
-spatialBrownianStep=0.05
+spatialBrownianStep=0.03
 # Millisecond time constant for gliding toward a new target; 0 moves immediately.
-spatialMotionSmoothingTimeMs=500.0
+spatialMotionSmoothingTimeMs=1000.0
 # Use a separate moving spotlight for every color mask.
 spatialIndependentMaskPositions=true
 # Keep each spotlight circular by preventing clipping at image edges.
-spatialKeepCirclesInsideImage=true
+spatialKeepCirclesInsideImage=false
