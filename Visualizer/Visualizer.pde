@@ -152,10 +152,13 @@ void setup() {
   for (int i = 0; i < colorNames.length; i++) {
     solidIntensities[i] = 0.0; // Default solid intensity
     bloomIntensities[i] = 0.0;  // Default bloom intensity
-    spatialPositionX[i] = 0.5;
-    spatialPositionY[i] = 0.5;
-    spatialTargetX[i] = 0.5;
-    spatialTargetY[i] = 0.5;
+    // Random starting point
+    float randomX = random(0.0, 1.0);
+    float randomY = random(0.0, 1.0);
+    spatialPositionX[i] = randomX;
+    spatialPositionY[i] = randomY;
+    spatialTargetX[i] = randomX;
+    spatialTargetY[i] = randomY;
 
     int yBase = 100 + i * 55;
     solidSliders[i] = new Slider(colorNames[i].toUpperCase() + " SOLID", 20, yBase, 150, 12, 0.0, 5.0, solidIntensities[i]);
