@@ -146,8 +146,10 @@ void setup() {
 
   solidSliders = new Slider[colorNames.length];
   bloomSliders = new Slider[colorNames.length];
-  baseSlider = new Slider("BASE IMAGE", 20, 60, 150, 12, 0.0, 1.0, baseIntensity);
-  audioSensSlider = new Slider("AUDIO SENSITIVITY", 20, 20, 150, 12, 0.0, 20.0, initialAudioSensitivity);
+  float sliderPanelHeight = 145.0 + (colorNames.length - 1) * 55.0;
+  float sliderPanelTop = max(20.0, height - sliderPanelHeight);
+  baseSlider = new Slider("BASE IMAGE", 20, sliderPanelTop + 60, 150, 12, 0.0, 1.0, baseIntensity);
+  audioSensSlider = new Slider("AUDIO SENSITIVITY", 20, sliderPanelTop + 20, 150, 12, 0.0, 20.0, initialAudioSensitivity);
 
   for (int i = 0; i < colorNames.length; i++) {
     solidIntensities[i] = 0.0; // Default solid intensity
@@ -160,7 +162,7 @@ void setup() {
     spatialTargetX[i] = randomX;
     spatialTargetY[i] = randomY;
 
-    int yBase = 100 + i * 55;
+    float yBase = sliderPanelTop + 100 + i * 55;
     solidSliders[i] = new Slider(colorNames[i].toUpperCase() + " SOLID", 20, yBase, 150, 12, 0.0, 5.0, solidIntensities[i]);
     bloomSliders[i] = new Slider(colorNames[i].toUpperCase() + " BLOOM", 20, yBase + 25, 150, 12, 0.0, 5.0, bloomIntensities[i]);
   }
@@ -515,19 +517,32 @@ void drawBandMapping() {
   int maxBin = getMaxAnalysisBin();
   float binWidth = audioSampleRate / actualAudioBufferSize;
   float effectiveMaxFrequency = min(maxFftFrequency, audioSampleRate * 0.5);
-  float x = 390;
+  String heading = "FFT BANDS — " + nf(audioSampleRate, 1, 0) + " Hz, " + actualAudioBufferSize + " samples, max " + formatFrequency(effectiveMaxFrequency) + ", curve " + nf(frequencyMappingExponent, 1, 2);
+  String[] bandLabels = new String[colorNames.length];
 
   pushStyle();
-  fill(255);
-  textAlign(LEFT, CENTER);
   textSize(14);
-  text("FFT BANDS — " + nf(audioSampleRate, 1, 0) + " Hz, " + actualAudioBufferSize + " samples, max " + formatFrequency(effectiveMaxFrequency) + ", curve " + nf(frequencyMappingExponent, 1, 2), x, 72);
-
+  float panelWidth = textWidth(heading);
   for (int i = 0; i < colorNames.length; i++) {
     float startFrequency = getBandStartBin(i, maxBin) * binWidth;
     float endFrequency = min(getBandEndBin(i, maxBin) * binWidth, effectiveMaxFrequency);
-    float y = 112.5 + i * 55;
-    text(colorNames[i].toUpperCase() + ": " + formatFrequency(startFrequency) + " - " + formatFrequency(endFrequency), x, y);
+    bandLabels[i] = colorNames[i].toUpperCase() + ": " + formatFrequency(startFrequency) + " - " + formatFrequency(endFrequency);
+    panelWidth = max(panelWidth, textWidth(bandLabels[i]));
+  }
+
+  float padding = 12;
+  float panelTop = 60;
+  float rowHeight = 22;
+  float panelHeight = 38 + colorNames.length * rowHeight;
+  noStroke();
+  fill(0, 190);
+  rect(width - panelWidth - padding * 2, panelTop, panelWidth + padding * 2, panelHeight);
+
+  fill(255);
+  textAlign(RIGHT, TOP);
+  text(heading, width - padding, panelTop + 8);
+  for (int i = 0; i < colorNames.length; i++) {
+    text(bandLabels[i], width - padding, panelTop + 30 + i * rowHeight);
   }
   popStyle();
 }
@@ -547,6 +562,8 @@ void drawStatusOverlay() {
   if (spatialRevealMode) {
     fpsStatus += " | ENERGY: " + nf(spatialEnergy * 100.0, 0, 0) + "%";
   }
+  String combinedStatus = maskStatus + "   " + fpsStatus;
+
   float padding = 18;
   float boxHeight = 44;
 
@@ -554,19 +571,15 @@ void drawStatusOverlay() {
   noTint();
   textSize(24);
 
-  // Dark translucent backgrounds keep the green text readable over bright imagery.
+  // Dark translucent background keeps the green text readable over bright imagery.
   noStroke();
   fill(0, 190);
-  rect(0, 0, textWidth(maskStatus) + padding * 2, boxHeight);
-  rect(width - textWidth(fpsStatus) - padding * 2, 0,
-    textWidth(fpsStatus) + padding * 2, boxHeight);
+  float boxWidth = textWidth(combinedStatus) + padding * 2;
+  rect(width - boxWidth, 0, boxWidth, boxHeight);
 
   fill(0, 255, 80);
-  textAlign(LEFT, TOP);
-  text(maskStatus, padding, 8);
-
   textAlign(RIGHT, TOP);
-  text(fpsStatus, width - padding, 8);
+  text(combinedStatus, width - padding, 8);
 }
 
 void preloadMasks() {
