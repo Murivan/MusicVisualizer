@@ -18,9 +18,11 @@ import java.io.File;
 import java.io.InputStream;
 
 PImage baseImg;
+PImage areaIdMask;
 PImage[] solidMasks;
 PImage[] bloomMasks;
 PShader spatialRevealShader;
+PShader areaRevealShader;
 volatile boolean masksDecoded = false;
 volatile int masksDecodedCount = 0;
 int warmupIndex = 0;
@@ -55,13 +57,21 @@ float audioBloomMultiplier = 1.0;     // Indicates how much more the bloom react
 float initialAudioSensitivity = 2.0;  // Initial value for the audio sensitivity slider
 float audioBaseIntensityScale = 0.5;  // How much the overall audio energy boosts the base image brightness
 float baseImageSilenceFloor = 0.0;    // The base image brightness (baseline) before audio boosts it
+// Reveal Modes
+enum RevealMode {
+  FULL,
+  SPATIAL,
+  AREA
+}
+RevealMode currentRevealMode = RevealMode.FULL;
+
+// Full/Global settings
 float audioAttackTimeMs = 50.0;       // Time constant for colored areas to rise toward a higher audio level
 float audioReleaseTimeMs = 500.0;     // Time constant for colored areas to fade after their audio level falls
 float audioSampleRate = 0.0;
 int actualAudioBufferSize = audioBufferSize;
 
 // Spatial Reveal Mode
-boolean startInSpatialRevealMode = false;       // Start with moving spotlights instead of full-mask illumination
 float spatialEnergyMultiplier = 1.0;            // Scales audio level before converting it to spotlight area
 float spatialMinimumRadius = 0.04;              // Quiet-sound radius as a fraction of the image height
 float spatialMaximumRadius = 0.5;               // Loud-sound radius; 0.5 covers the circular image when centered
@@ -71,6 +81,12 @@ float spatialBrownianStep = 0.05;               // Brownian target-step scale as
 float spatialMotionSmoothingTimeMs = 500.0;     // Time constant used to glide toward each new target
 boolean spatialIndependentMaskPositions = true; // Give each color mask its own moving spotlight
 boolean spatialKeepCirclesInsideImage = true;   // Recenter and limit spotlights so edges never clip them
+
+// Area Reveal Mode
+float areaEnergyMultiplier = 2.0;               // Scales audio level before converting it to probability threshold
+float areaSeedChangeIntervalMs = 5000.0;        // How often to shuffle the area assignments (ms)
+float areaShuffleSeed = 0.0;
+int lastAreaSeedUpdateMs = 0;
 
 
 // Different mappings can be obtained changing the order of the color names in this array.
@@ -87,7 +103,6 @@ float baseIntensity = baseImageSilenceFloor;
 float audioSensitivity = initialAudioSensitivity;
 int lastAudioResponseMs = 0;
 
-boolean spatialRevealMode = false;
 float spatialEnergy = 0.0;
 float spatialRevealRadius = 0.0;
 float[] spatialPositionX = new float[colorNames.length];
@@ -124,14 +139,15 @@ void setup() {
   baseIntensity = baseImageSilenceFloor;
   audioSensitivity = initialAudioSensitivity;
   actualAudioBufferSize = audioBufferSize;
-  spatialRevealMode = startInSpatialRevealMode;
   spatialRevealRadius = spatialMinimumRadius;
   //smooth(4); // Reduced from 8 since Retina density already makes lines crisp
   //pixelDensity(displayDensity());
 
-  // Load the base image immediately, then decode every mask in a background thread.
+  // Setup GPU shaders and masks
   baseImg = loadImage("window_base.png");
+  areaIdMask = loadImage("mask_area_ids.png");
   spatialRevealShader = loadShader("spatial_reveal.glsl");
+  areaRevealShader = loadShader("area_reveal.glsl");
   solidMasks = new PImage[colorNames.length];
   bloomMasks = new PImage[colorNames.length];
 
@@ -211,7 +227,11 @@ void loadParameters() {
   audioAttackTimeMs = getFloatParameter(parameters, "audioAttackTimeMs", audioAttackTimeMs, 0.0, 60000.0);
   audioReleaseTimeMs = getFloatParameter(parameters, "audioReleaseTimeMs", audioReleaseTimeMs, 0.0, 60000.0);
 
-  startInSpatialRevealMode = getBooleanParameter(parameters, "startInSpatialRevealMode", startInSpatialRevealMode);
+  String startMode = parameters.getProperty("startRevealMode", "FULL").trim().toUpperCase();
+  if (startMode.equals("SPATIAL")) currentRevealMode = RevealMode.SPATIAL;
+  else if (startMode.equals("AREA")) currentRevealMode = RevealMode.AREA;
+  else currentRevealMode = RevealMode.FULL;
+
   spatialEnergyMultiplier = getFloatParameter(parameters, "spatialEnergyMultiplier", spatialEnergyMultiplier, 0.0, 100.0);
   spatialMinimumRadius = getFloatParameter(parameters, "spatialMinimumRadius", spatialMinimumRadius, 0.0, 2.0);
   spatialMaximumRadius = getFloatParameter(parameters, "spatialMaximumRadius", spatialMaximumRadius, spatialMinimumRadius, 2.0);
@@ -221,6 +241,9 @@ void loadParameters() {
   spatialMotionSmoothingTimeMs = getFloatParameter(parameters, "spatialMotionSmoothingTimeMs", spatialMotionSmoothingTimeMs, 0.0, 60000.0);
   spatialIndependentMaskPositions = getBooleanParameter(parameters, "spatialIndependentMaskPositions", spatialIndependentMaskPositions);
   spatialKeepCirclesInsideImage = getBooleanParameter(parameters, "spatialKeepCirclesInsideImage", spatialKeepCirclesInsideImage);
+
+  areaEnergyMultiplier = getFloatParameter(parameters, "areaEnergyMultiplier", areaEnergyMultiplier, 0.0, 100.0);
+  areaSeedChangeIntervalMs = getFloatParameter(parameters, "areaSeedChangeIntervalMs", areaSeedChangeIntervalMs, 0.0, 60000.0);
 }
 
 int getIntParameter(Properties parameters, String name, int defaultValue, int minimum, int maximum) {
@@ -342,7 +365,21 @@ void draw() {
     if (allMasksReady) {
       blendMode(ADD);
 
-      boolean useSpatialShader = spatialRevealMode && spatialRevealShader != null;
+      boolean useSpatialShader = currentRevealMode == RevealMode.SPATIAL && spatialRevealShader != null;
+      boolean useAreaShader = currentRevealMode == RevealMode.AREA && areaRevealShader != null && areaIdMask != null;
+
+      if (useAreaShader) {
+        float baseElapsedMs = lastAudioResponseMs == 0 ? 1000.0 / fps : millis() - lastAudioResponseMs;
+        float drawAttackAmount = audioAttackTimeMs <= 0.0 ? 1.0 : 1.0 - exp(-baseElapsedMs / audioAttackTimeMs);
+        float drawReleaseAmount = audioReleaseTimeMs <= 0.0 ? 1.0 : 1.0 - exp(-baseElapsedMs / audioReleaseTimeMs);
+        areaRevealShader.set("idMap", areaIdMask);
+        areaRevealShader.set("shuffleSeed", areaShuffleSeed);
+        float threshold = constrain(currentLevel * audioSensitivity * areaEnergyMultiplier, 0.0, 1.0);
+        float activeEnergyAmount = threshold >= spatialEnergy ? drawAttackAmount : drawReleaseAmount;
+        spatialEnergy = lerp(spatialEnergy, threshold, activeEnergyAmount);
+        areaRevealShader.set("audioEnergy", spatialEnergy);
+        shader(areaRevealShader);
+      }
 
       for (int i = 0; i < colorNames.length; i++) {
         if (useSpatialShader) {
@@ -371,6 +408,10 @@ void draw() {
         if (useSpatialShader) {
           resetShader();
         }
+      }
+
+      if (useAreaShader) {
+        resetShader();
       }
     }
 
@@ -404,14 +445,28 @@ void keyPressed() {
   if (key == 'v' || key == 'V') {
     showVerboseUi = !showVerboseUi;
   } else if (key == 'm' || key == 'M') {
-    spatialRevealMode = !spatialRevealMode;
-    if (spatialRevealMode) {
+    int nextMode = (currentRevealMode.ordinal() + 1) % RevealMode.values().length;
+    currentRevealMode = RevealMode.values()[nextMode];
+    if (currentRevealMode == RevealMode.SPATIAL) {
       lastSpatialMotionUpdateMs = millis() - round(spatialMotionUpdateIntervalMs);
     }
   }
 }
 
 void updateSpatialReveal(float currentLevel, int currentMs, float elapsedMs, float attackAmount, float releaseAmount) {
+  if (currentRevealMode == RevealMode.AREA) {
+    if (areaSeedChangeIntervalMs > 0 && (lastAreaSeedUpdateMs == 0 || currentMs - lastAreaSeedUpdateMs >= areaSeedChangeIntervalMs)) {
+      areaShuffleSeed = random(0.0, 1000.0);
+      lastAreaSeedUpdateMs = currentMs;
+    }
+  } else if (currentRevealMode != RevealMode.SPATIAL) {
+    float targetEnergy = constrain(currentLevel * audioSensitivity * spatialEnergyMultiplier, 0.0, 1.0);
+    float energyAmount = targetEnergy >= spatialEnergy ? attackAmount : releaseAmount;
+    spatialEnergy = lerp(spatialEnergy, targetEnergy, energyAmount);
+  }
+
+  if (currentRevealMode != RevealMode.SPATIAL) return;
+
   float targetEnergy = constrain(currentLevel * audioSensitivity * spatialEnergyMultiplier, 0.0, 1.0);
   float energyAmount = targetEnergy >= spatialEnergy ? attackAmount : releaseAmount;
   spatialEnergy = lerp(spatialEnergy, targetEnergy, energyAmount);
@@ -424,8 +479,6 @@ void updateSpatialReveal(float currentLevel, int currentMs, float elapsedMs, flo
   if (spatialKeepCirclesInsideImage) {
     spatialRevealRadius = min(spatialRevealRadius, min(0.5, imageAspect * 0.5));
   }
-
-  if (!spatialRevealMode) return;
 
   boolean updateTargets = lastSpatialMotionUpdateMs == 0
     || currentMs - lastSpatialMotionUpdateMs >= spatialMotionUpdateIntervalMs;
@@ -556,10 +609,10 @@ void drawStatusOverlay() {
   } else {
     maskStatus = "ALL MASKS ACTIVE";
   }
-  maskStatus += " | MODE: " + (spatialRevealMode ? "SPATIAL" : "FULL") + " (M)";
+  maskStatus += " | MODE: " + currentRevealMode.name() + " (M)";
 
   String fpsStatus = "FPS: " + nf(frameRate, 0, 1);
-  if (spatialRevealMode) {
+  if (currentRevealMode != RevealMode.FULL) {
     fpsStatus += " | ENERGY: " + nf(spatialEnergy * 100.0, 0, 0) + "%";
   }
   String combinedStatus = maskStatus + "   " + fpsStatus;

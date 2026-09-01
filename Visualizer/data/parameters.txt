@@ -40,3 +40,11 @@ spatialMotionSmoothingTimeMs=1000.0
 spatialIndependentMaskPositions=true
 # Keep each spotlight circular by preventing clipping at image edges.
 spatialKeepCirclesInsideImage=false
+
+# Area Reveal Mode
+# Start up rendering mode (FULL, SPATIAL, or AREA)
+startRevealMode=FULL
+# Scales audio level before it regulates pane light-up probability
+areaEnergyMultiplier=1.0
+# Milliseconds between shuffling the pane assignments; 0 disables reshuffling.
+areaSeedChangeIntervalMs=5000.0
