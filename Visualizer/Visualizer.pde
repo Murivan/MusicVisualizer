@@ -26,6 +26,7 @@ PImage areaIdMask;
 PImage[] solidMasks;
 PImage[] bloomMasks;
 PShader spotlightRevealShader;
+PShader spotlightBaseRevealShader;
 PShader areaRevealShader;
 volatile boolean masksDecoded = false;
 volatile int masksDecodedCount = 0;
@@ -218,6 +219,7 @@ void setup() {
   baseImg = loadImage("window_base.png");
   areaIdMask = loadImage("mask_area_ids.png");
   spotlightRevealShader = loadShader("spotlight_reveal.glsl");
+  spotlightBaseRevealShader = loadShader("spotlight_base_reveal.glsl");
   areaRevealShader = loadShader("area_reveal.glsl");
   solidMasks = new PImage[colorNames.length];
   bloomMasks = new PImage[colorNames.length];
@@ -404,10 +406,17 @@ void draw() {
   }
 
   if (baseImg != null) {
-    // Draw the unmodified source image first.
+    boolean useSpotlightBaseReveal = currentRevealMode == RevealMode.SPOTLIGHT && spotlightBaseRevealShader != null;
     blendMode(BLEND);
     tint(255 * baseIntensity, 255);
+    if (useSpotlightBaseReveal) {
+      spotlightBaseRevealShader.set("revealEnergy", spotlightEnergy);
+      spotlightBaseRevealShader.set("edgeFeather", max(0.01, spotlightEdgeFeatherProportion * 0.1));
+      spotlightBaseRevealShader.set("imageAspect", imgW / imgH);
+      shader(spotlightBaseRevealShader);
+    }
     image(baseImg, imgX, imgY, imgW, imgH);
+    if (useSpotlightBaseReveal) resetShader();
 
     // Decode in the background, then upload one mask pair per frame to the GPU.
     if (masksDecoded && !allMasksReady) {

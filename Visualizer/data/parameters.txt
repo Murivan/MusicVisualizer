@@ -15,7 +15,7 @@ fps=30
 # Audio analysis
 audioBufferSize=2048
 maxFftFrequency=16000.0
-frequencyMappingExponent=3.5
+frequencyMappingExponent=3.0
 audioBandMultiplier=0.1
 audioBloomMultiplier=1.0
 initialAudioSensitivity=2.0
