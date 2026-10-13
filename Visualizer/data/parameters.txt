@@ -5,8 +5,12 @@
 useFullScreen=true
 canvasWidth=1920
 canvasHeight=1080
+# Zero-based display index preselected in the fullscreen display chooser.
+visualizationDisplay=0
+# The separate, resizable control window starts at these dimensions.
+controlsWindowWidth=900
+controlsWindowHeight=1080
 fps=30
-showVerboseUi=false
 
 # Audio analysis
 audioBufferSize=2048
@@ -20,31 +24,29 @@ baseImageSilenceFloor=0.0
 audioAttackTimeMs=50.0
 audioReleaseTimeMs=500.0
 
-# Spatial reveal mode (toggle at runtime with M)
-# Start in spatial mode instead of full-mask mode.
-startInSpatialRevealMode=false
+# Spotlight reveal mode (toggle at runtime with M)
 # Scales audio level before it is converted into spotlight area.
-spatialEnergyMultiplier=1.0
+spotlightEnergyMultiplier=1.0
 # Quiet and loud radii, measured as fractions of image height.
-spatialMinimumRadius=0.04
-spatialMaximumRadius=0.5
+spotlightMinimumRadius=0.04
+spotlightMaximumRadius=0.5
 # Fraction of each spotlight radius used for fading: 0 is sharp, 1 fades from center to edge.
-spatialEdgeFeatherProportion=0.35
+spotlightEdgeFeatherProportion=0.35
 # Milliseconds between new Brownian motion targets.
-spatialMotionUpdateIntervalMs=1000.0
+spotlightMotionUpdateIntervalMs=1000.0
 # Scale of each random target displacement relative to image size.
-spatialBrownianStep=0.03
+spotlightBrownianStep=0.03
 # Millisecond time constant for gliding toward a new target; 0 moves immediately.
-spatialMotionSmoothingTimeMs=1000.0
+spotlightMotionSmoothingTimeMs=1000.0
 # Use a separate moving spotlight for every color mask.
-spatialIndependentMaskPositions=true
+spotlightIndependentMaskPositions=true
 # Keep each spotlight circular by preventing clipping at image edges.
-spatialKeepCirclesInsideImage=false
+spotlightKeepCirclesInsideImage=false
 
 # Area Reveal Mode
-# Start up rendering mode (FULL, SPATIAL, or AREA)
+# Start up rendering mode (FULL, SPOTLIGHT, or AREA)
 startRevealMode=FULL
 # Scales audio level before it regulates pane light-up probability
 areaEnergyMultiplier=1.0
-# Milliseconds between shuffling the pane assignments; 0 disables reshuffling.
-areaSeedChangeIntervalMs=5000.0
+# Seconds it takes for the random area selection to do a full migration cycle
+areaCycleDurationSeconds=12.0

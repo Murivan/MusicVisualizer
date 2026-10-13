@@ -8,12 +8,14 @@ precision mediump int;
 uniform sampler2D texture;
 uniform sampler2D idMap;
 uniform float audioEnergy;
-uniform float shuffleSeed;
+uniform float time;
+uniform float cycleDuration;
+uniform float seedOffset;
 
 varying vec4 vertColor;
 varying vec4 vertTexCoord;
 
-// Pseudo-random hash function based on fractional parts of sines
+// Pseudo-random hash function
 float hash(vec3 p) {
     return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164))) * 43758.5453);
 }
@@ -33,15 +35,20 @@ void main() {
         return;
     }
     
-    // Generate a pseudo-random activation threshold unique to this pane and current shuffle seed
-    float paneThreshold = hash(vec3(b, g, r) + vec3(shuffleSeed));
+    // Generate a permanent random phase 0.0 - 1.0 unique to this pane and mask seed
+    float paneHash = hash(vec3(b, g, r) + vec3(seedOffset));
+    float panePhase = paneHash * 6.2831853; // 2 * PI
     
-    // Display the underlying original color pixel only if its pane is "active" for the current audio level
+    // Calculate slowly cycling value between 0.0 and 1.0.
+    float timePhase = (time / max(0.1, cycleDuration)) * 6.2831853;
+    float paneValue = (sin(timePhase + panePhase) + 1.0) * 0.5;
+    
+    // Pane is fully visible if paneValue < audioEnergy.
+    // Soft threshold ensures smooth fades as the sine wave passes the energy level.
+    float visibility = smoothstep(audioEnergy + 0.02, audioEnergy - 0.02, paneValue);
+
     vec4 color = texture2D(texture, vertTexCoord.st) * vertColor;
-    
-    // We can fade softly into existence instead of binary cutoffs using smoothstep
-    float visibility = smoothstep(paneThreshold - 0.05, paneThreshold + 0.05, audioEnergy);
     color.a *= visibility;
-    
+
     gl_FragColor = color;
 }

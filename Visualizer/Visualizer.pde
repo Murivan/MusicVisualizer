@@ -16,12 +16,16 @@ import javax.swing.JOptionPane;
 import javax.swing.JDialog;
 import java.io.File;
 import java.io.InputStream;
+import java.awt.GraphicsEnvironment;
+import java.awt.GraphicsDevice;
+import java.awt.DisplayMode;
+import java.awt.Rectangle;
 
 PImage baseImg;
 PImage areaIdMask;
 PImage[] solidMasks;
 PImage[] bloomMasks;
-PShader spatialRevealShader;
+PShader spotlightRevealShader;
 PShader areaRevealShader;
 volatile boolean masksDecoded = false;
 volatile int masksDecodedCount = 0;
@@ -45,8 +49,11 @@ boolean isCancelled = false;
 boolean useFullScreen = true; // Set to false to use custom canvas bounds below
 int canvasWidth = 1920;
 int canvasHeight = 1080;
+int visualizationDisplay = 0;
+int controlsWindowWidth = 900;
+int controlsWindowHeight = 1080;
 int fps = 30;
-boolean showVerboseUi = false;
+ControlsWindow controlsWindow;
 
 // Audio Configuration
 int audioBufferSize = 2048;           // Size of the audio buffer (also dictates FFT resolution)
@@ -60,7 +67,7 @@ float baseImageSilenceFloor = 0.0;    // The base image brightness (baseline) be
 // Reveal Modes
 enum RevealMode {
   FULL,
-  SPATIAL,
+  SPOTLIGHT,
   AREA
 }
 RevealMode currentRevealMode = RevealMode.FULL;
@@ -71,22 +78,20 @@ float audioReleaseTimeMs = 500.0;     // Time constant for colored areas to fade
 float audioSampleRate = 0.0;
 int actualAudioBufferSize = audioBufferSize;
 
-// Spatial Reveal Mode
-float spatialEnergyMultiplier = 1.0;            // Scales audio level before converting it to spotlight area
-float spatialMinimumRadius = 0.04;              // Quiet-sound radius as a fraction of the image height
-float spatialMaximumRadius = 0.5;               // Loud-sound radius; 0.5 covers the circular image when centered
-float spatialEdgeFeatherProportion = 0.25;       // Fraction of each spotlight radius used for its soft edge
-float spatialMotionUpdateIntervalMs = 1000.0;   // Milliseconds between new Brownian motion targets
-float spatialBrownianStep = 0.05;               // Brownian target-step scale as a fraction of image size
-float spatialMotionSmoothingTimeMs = 500.0;     // Time constant used to glide toward each new target
-boolean spatialIndependentMaskPositions = true; // Give each color mask its own moving spotlight
-boolean spatialKeepCirclesInsideImage = true;   // Recenter and limit spotlights so edges never clip them
+// Spotlight Reveal Mode
+float spotlightEnergyMultiplier = 1.0;            // Scales audio level before converting it to spotlight area
+float spotlightMinimumRadius = 0.04;              // Quiet-sound radius as a fraction of the image height
+float spotlightMaximumRadius = 0.5;               // Loud-sound radius; 0.5 covers the circular image when centered
+float spotlightEdgeFeatherProportion = 0.25;       // Fraction of each spotlight radius used for its soft edge
+float spotlightMotionUpdateIntervalMs = 1000.0;   // Milliseconds between new Brownian motion targets
+float spotlightBrownianStep = 0.05;               // Brownian target-step scale as a fraction of image size
+float spotlightMotionSmoothingTimeMs = 500.0;     // Time constant used to glide toward each new target
+boolean spotlightIndependentMaskPositions = true; // Give each color mask its own moving spotlight
+boolean spotlightKeepCirclesInsideImage = true;   // Recenter and limit spotlights so edges never clip them
 
 // Area Reveal Mode
 float areaEnergyMultiplier = 2.0;               // Scales audio level before converting it to probability threshold
-float areaSeedChangeIntervalMs = 5000.0;        // How often to shuffle the area assignments (ms)
-float areaShuffleSeed = 0.0;
-int lastAreaSeedUpdateMs = 0;
+float areaCycleDurationSeconds = 12.0;          // How fast the random areas evolve and cycle (seconds)
 
 
 // Different mappings can be obtained changing the order of the color names in this array.
@@ -101,20 +106,24 @@ float[] bloomIntensities = new float[colorNames.length];
 float[] releasedBandIntensities = new float[colorNames.length];
 float baseIntensity = baseImageSilenceFloor;
 float audioSensitivity = initialAudioSensitivity;
+volatile float currentAudioLevel = 0.0;
 int lastAudioResponseMs = 0;
 
-float spatialEnergy = 0.0;
-float spatialRevealRadius = 0.0;
-float[] spatialPositionX = new float[colorNames.length];
-float[] spatialPositionY = new float[colorNames.length];
-float[] spatialTargetX = new float[colorNames.length];
-float[] spatialTargetY = new float[colorNames.length];
-int lastSpatialMotionUpdateMs = 0;
+float spotlightEnergy = 0.0;
+float spotlightRevealRadius = 0.0;
+float[] spotlightPositionX = new float[colorNames.length];
+float[] spotlightPositionY = new float[colorNames.length];
+float[] spotlightTargetX = new float[colorNames.length];
+float[] spotlightTargetY = new float[colorNames.length];
+int lastSpotlightMotionUpdateMs = 0;
 
 Slider[] solidSliders;
 Slider[] bloomSliders;
 Slider baseSlider;
 Slider audioSensSlider;
+RuntimeSlider[] audioResponseSliders;
+RuntimeSlider[] spotlightRevealSliders;
+RuntimeSlider[] areaRevealSliders;
 
 static
 {
@@ -128,10 +137,72 @@ static
 void settings() {
   loadParameters();
   if (useFullScreen) {
-    fullScreen(P2D);
+    GraphicsDevice[] displays = GraphicsEnvironment.getLocalGraphicsEnvironment().getScreenDevices();
+    int displayCount = displays.length;
+    visualizationDisplay = constrain(visualizationDisplay, 0, max(0, displayCount - 1));
+    visualizationDisplay = promptForVisualizationDisplay(displays, visualizationDisplay);
+    fullScreen(P2D, visualizationDisplay);
   } else {
     size(canvasWidth, canvasHeight, P2D);
   }
+}
+
+int promptForVisualizationDisplay(GraphicsDevice[] displays, int defaultDisplay) {
+  if (displays.length == 0) {
+    println("No displays were reported; using display 0.");
+    return 0;
+  }
+
+  String[] displayOptions = new String[displays.length];
+  for (int i = 0; i < displays.length; i++) {
+    displayOptions[i] = describeDisplay(i, displays[i]);
+  }
+
+  JOptionPane pane = new JOptionPane(
+    "Select the display for the fullscreen visualization:",
+    JOptionPane.QUESTION_MESSAGE,
+    JOptionPane.DEFAULT_OPTION,
+    null,
+    null,
+    null
+  );
+  pane.setWantsInput(true);
+  pane.setSelectionValues(displayOptions);
+  pane.setInitialSelectionValue(displayOptions[defaultDisplay]);
+  JDialog dialog = pane.createDialog(null, "Fullscreen Visualization Display");
+  dialog.setAlwaysOnTop(true);
+  dialog.setVisible(true);
+
+  Object selectedValue = pane.getInputValue();
+  if (selectedValue == JOptionPane.UNINITIALIZED_VALUE || selectedValue == null) {
+    return defaultDisplay;
+  }
+
+  for (int i = 0; i < displayOptions.length; i++) {
+    if (displayOptions[i].equals(selectedValue)) return i;
+  }
+
+  println("Could not match the selected display; using configured display " + defaultDisplay + ".");
+  return defaultDisplay;
+}
+
+String describeDisplay(int index, GraphicsDevice display) {
+  DisplayMode mode = display.getDisplayMode();
+  Rectangle bounds = display.getDefaultConfiguration().getBounds();
+  String refreshRate = mode.getRefreshRate() == DisplayMode.REFRESH_RATE_UNKNOWN
+    ? "unknown refresh"
+    : mode.getRefreshRate() + " Hz";
+  String colorDepth = mode.getBitDepth() == DisplayMode.BIT_DEPTH_MULTI
+    ? "multi-depth"
+    : mode.getBitDepth() + "-bit";
+
+  return "Display " + (index + 1)
+    + " | " + display.getIDstring()
+    + " | " + mode.getWidth() + "x" + mode.getHeight()
+    + " @ " + refreshRate
+    + " | " + colorDepth
+    + " | bounds " + bounds.x + "," + bounds.y + " " + bounds.width + "x" + bounds.height
+    + " | fullscreen " + (display.isFullScreenSupported() ? "supported" : "not supported");
 }
 
 void setup() {
@@ -139,14 +210,14 @@ void setup() {
   baseIntensity = baseImageSilenceFloor;
   audioSensitivity = initialAudioSensitivity;
   actualAudioBufferSize = audioBufferSize;
-  spatialRevealRadius = spatialMinimumRadius;
+  spotlightRevealRadius = spotlightMinimumRadius;
   //smooth(4); // Reduced from 8 since Retina density already makes lines crisp
   //pixelDensity(displayDensity());
 
   // Setup GPU shaders and masks
   baseImg = loadImage("window_base.png");
   areaIdMask = loadImage("mask_area_ids.png");
-  spatialRevealShader = loadShader("spatial_reveal.glsl");
+  spotlightRevealShader = loadShader("spotlight_reveal.glsl");
   areaRevealShader = loadShader("area_reveal.glsl");
   solidMasks = new PImage[colorNames.length];
   bloomMasks = new PImage[colorNames.length];
@@ -160,28 +231,21 @@ void setup() {
     imgY = (height - imgH) / 2;
   }
 
-  solidSliders = new Slider[colorNames.length];
-  bloomSliders = new Slider[colorNames.length];
-  float sliderPanelHeight = 145.0 + (colorNames.length - 1) * 55.0;
-  float sliderPanelTop = max(20.0, height - sliderPanelHeight);
-  baseSlider = new Slider("BASE IMAGE", 20, sliderPanelTop + 60, 150, 12, 0.0, 1.0, baseIntensity);
-  audioSensSlider = new Slider("AUDIO SENSITIVITY", 20, sliderPanelTop + 20, 150, 12, 0.0, 20.0, initialAudioSensitivity);
-
   for (int i = 0; i < colorNames.length; i++) {
     solidIntensities[i] = 0.0; // Default solid intensity
     bloomIntensities[i] = 0.0;  // Default bloom intensity
     // Random starting point
     float randomX = random(0.0, 1.0);
     float randomY = random(0.0, 1.0);
-    spatialPositionX[i] = randomX;
-    spatialPositionY[i] = randomY;
-    spatialTargetX[i] = randomX;
-    spatialTargetY[i] = randomY;
+    spotlightPositionX[i] = randomX;
+    spotlightPositionY[i] = randomY;
+    spotlightTargetX[i] = randomX;
+    spotlightTargetY[i] = randomY;
 
-    float yBase = sliderPanelTop + 100 + i * 55;
-    solidSliders[i] = new Slider(colorNames[i].toUpperCase() + " SOLID", 20, yBase, 150, 12, 0.0, 5.0, solidIntensities[i]);
-    bloomSliders[i] = new Slider(colorNames[i].toUpperCase() + " BLOOM", 20, yBase + 25, 150, 12, 0.0, 5.0, bloomIntensities[i]);
   }
+
+  controlsWindow = new ControlsWindow();
+  PApplet.runSketch(new String[] {"ControlsWindow"}, controlsWindow);
 
   thread("preloadMasks");
   thread("setupAudio");
@@ -207,9 +271,10 @@ void loadParameters() {
   useFullScreen = getBooleanParameter(parameters, "useFullScreen", useFullScreen);
   canvasWidth = getIntParameter(parameters, "canvasWidth", canvasWidth, 320, 16384);
   canvasHeight = getIntParameter(parameters, "canvasHeight", canvasHeight, 240, 16384);
+  visualizationDisplay = getIntParameter(parameters, "visualizationDisplay", visualizationDisplay, 0, 15);
+  controlsWindowWidth = getIntParameter(parameters, "controlsWindowWidth", controlsWindowWidth, 320, 4096);
+  controlsWindowHeight = getIntParameter(parameters, "controlsWindowHeight", controlsWindowHeight, 240, 4096);
   fps = getIntParameter(parameters, "fps", fps, 1, 240);
-  showVerboseUi = getBooleanParameter(parameters, "showVerboseUi", showVerboseUi);
-
   int requestedBufferSize = getIntParameter(parameters, "audioBufferSize", audioBufferSize, 32, 65536);
   if ((requestedBufferSize & (requestedBufferSize - 1)) == 0) {
     audioBufferSize = requestedBufferSize;
@@ -228,22 +293,22 @@ void loadParameters() {
   audioReleaseTimeMs = getFloatParameter(parameters, "audioReleaseTimeMs", audioReleaseTimeMs, 0.0, 60000.0);
 
   String startMode = parameters.getProperty("startRevealMode", "FULL").trim().toUpperCase();
-  if (startMode.equals("SPATIAL")) currentRevealMode = RevealMode.SPATIAL;
+  if (startMode.equals("SPOTLIGHT")) currentRevealMode = RevealMode.SPOTLIGHT;
   else if (startMode.equals("AREA")) currentRevealMode = RevealMode.AREA;
   else currentRevealMode = RevealMode.FULL;
 
-  spatialEnergyMultiplier = getFloatParameter(parameters, "spatialEnergyMultiplier", spatialEnergyMultiplier, 0.0, 100.0);
-  spatialMinimumRadius = getFloatParameter(parameters, "spatialMinimumRadius", spatialMinimumRadius, 0.0, 2.0);
-  spatialMaximumRadius = getFloatParameter(parameters, "spatialMaximumRadius", spatialMaximumRadius, spatialMinimumRadius, 2.0);
-  spatialEdgeFeatherProportion = getFloatParameter(parameters, "spatialEdgeFeatherProportion", spatialEdgeFeatherProportion, 0.0, 1.0);
-  spatialMotionUpdateIntervalMs = getFloatParameter(parameters, "spatialMotionUpdateIntervalMs", spatialMotionUpdateIntervalMs, 1.0, 60000.0);
-  spatialBrownianStep = getFloatParameter(parameters, "spatialBrownianStep", spatialBrownianStep, 0.0, 1.0);
-  spatialMotionSmoothingTimeMs = getFloatParameter(parameters, "spatialMotionSmoothingTimeMs", spatialMotionSmoothingTimeMs, 0.0, 60000.0);
-  spatialIndependentMaskPositions = getBooleanParameter(parameters, "spatialIndependentMaskPositions", spatialIndependentMaskPositions);
-  spatialKeepCirclesInsideImage = getBooleanParameter(parameters, "spatialKeepCirclesInsideImage", spatialKeepCirclesInsideImage);
+  spotlightEnergyMultiplier = getFloatParameter(parameters, "spotlightEnergyMultiplier", spotlightEnergyMultiplier, 0.0, 100.0);
+  spotlightMinimumRadius = getFloatParameter(parameters, "spotlightMinimumRadius", spotlightMinimumRadius, 0.0, 2.0);
+  spotlightMaximumRadius = getFloatParameter(parameters, "spotlightMaximumRadius", spotlightMaximumRadius, spotlightMinimumRadius, 2.0);
+  spotlightEdgeFeatherProportion = getFloatParameter(parameters, "spotlightEdgeFeatherProportion", spotlightEdgeFeatherProportion, 0.0, 1.0);
+  spotlightMotionUpdateIntervalMs = getFloatParameter(parameters, "spotlightMotionUpdateIntervalMs", spotlightMotionUpdateIntervalMs, 1.0, 60000.0);
+  spotlightBrownianStep = getFloatParameter(parameters, "spotlightBrownianStep", spotlightBrownianStep, 0.0, 1.0);
+  spotlightMotionSmoothingTimeMs = getFloatParameter(parameters, "spotlightMotionSmoothingTimeMs", spotlightMotionSmoothingTimeMs, 0.0, 60000.0);
+  spotlightIndependentMaskPositions = getBooleanParameter(parameters, "spotlightIndependentMaskPositions", spotlightIndependentMaskPositions);
+  spotlightKeepCirclesInsideImage = getBooleanParameter(parameters, "spotlightKeepCirclesInsideImage", spotlightKeepCirclesInsideImage);
 
   areaEnergyMultiplier = getFloatParameter(parameters, "areaEnergyMultiplier", areaEnergyMultiplier, 0.0, 100.0);
-  areaSeedChangeIntervalMs = getFloatParameter(parameters, "areaSeedChangeIntervalMs", areaSeedChangeIntervalMs, 0.0, 60000.0);
+  areaCycleDurationSeconds = getFloatParameter(parameters, "areaCycleDurationSeconds", areaCycleDurationSeconds, 0.1, 86400.0);
 }
 
 int getIntParameter(Properties parameters, String name, int defaultValue, int minimum, int maximum) {
@@ -303,23 +368,14 @@ void draw() {
 
   background(0);
 
-  // Update sliders
-  if (solidSliders != null && bloomSliders != null && baseSlider != null && audioSensSlider != null) {
-    boolean mPressed = mousePressed;
+  currentAudioLevel = currentLevel;
+  int currentAudioResponseMs = millis();
+  float elapsedMs = lastAudioResponseMs == 0 ? 1000.0 / fps : currentAudioResponseMs - lastAudioResponseMs;
+  lastAudioResponseMs = currentAudioResponseMs;
+  float attackAmount = audioAttackTimeMs <= 0.0 ? 1.0 : 1.0 - exp(-elapsedMs / audioAttackTimeMs);
+  float releaseAmount = audioReleaseTimeMs <= 0.0 ? 1.0 : 1.0 - exp(-elapsedMs / audioReleaseTimeMs);
 
-    audioSensSlider.update(mouseX, mouseY, mPressed);
-    audioSensitivity = audioSensSlider.val;
-
-    baseSlider.update(mouseX, mouseY, mPressed);
-    baseIntensity = baseSlider.val + (currentLevel * audioBaseIntensityScale * audioSensitivity);
-    baseIntensity = constrain(baseIntensity, 0.0, 1.0);
-
-    int currentAudioResponseMs = millis();
-    float elapsedMs = lastAudioResponseMs == 0 ? 1000.0 / fps : currentAudioResponseMs - lastAudioResponseMs;
-    lastAudioResponseMs = currentAudioResponseMs;
-    float attackAmount = audioAttackTimeMs <= 0.0 ? 1.0 : 1.0 - exp(-elapsedMs / audioAttackTimeMs);
-    float releaseAmount = audioReleaseTimeMs <= 0.0 ? 1.0 : 1.0 - exp(-elapsedMs / audioReleaseTimeMs);
-
+  if (solidSliders != null && bloomSliders != null) {
     for (int i = 0; i < colorNames.length; i++) {
       float bandVal = 0.0;
       if (isAudioReady && fft != null) {
@@ -340,14 +396,11 @@ void draw() {
         releasedBandIntensities[i] = lerp(releasedBandIntensities[i], bandVal, releaseAmount);
       }
 
-      solidSliders[i].update(mouseX, mouseY, mPressed);
       solidIntensities[i] = solidSliders[i].val + releasedBandIntensities[i];
-
-      bloomSliders[i].update(mouseX, mouseY, mPressed);
       bloomIntensities[i] = bloomSliders[i].val + releasedBandIntensities[i] * audioBloomMultiplier;
     }
 
-    updateSpatialReveal(currentLevel, currentAudioResponseMs, elapsedMs, attackAmount, releaseAmount);
+    updateSpotlightReveal(currentLevel, currentAudioResponseMs, elapsedMs, attackAmount, releaseAmount);
   }
 
   if (baseImg != null) {
@@ -365,30 +418,28 @@ void draw() {
     if (allMasksReady) {
       blendMode(ADD);
 
-      boolean useSpatialShader = currentRevealMode == RevealMode.SPATIAL && spatialRevealShader != null;
+      boolean useSpotlightShader = currentRevealMode == RevealMode.SPOTLIGHT && spotlightRevealShader != null;
       boolean useAreaShader = currentRevealMode == RevealMode.AREA && areaRevealShader != null && areaIdMask != null;
 
-      if (useAreaShader) {
-        float baseElapsedMs = lastAudioResponseMs == 0 ? 1000.0 / fps : millis() - lastAudioResponseMs;
-        float drawAttackAmount = audioAttackTimeMs <= 0.0 ? 1.0 : 1.0 - exp(-baseElapsedMs / audioAttackTimeMs);
-        float drawReleaseAmount = audioReleaseTimeMs <= 0.0 ? 1.0 : 1.0 - exp(-baseElapsedMs / audioReleaseTimeMs);
-        areaRevealShader.set("idMap", areaIdMask);
-        areaRevealShader.set("shuffleSeed", areaShuffleSeed);
-        float threshold = constrain(currentLevel * audioSensitivity * areaEnergyMultiplier, 0.0, 1.0);
-        float activeEnergyAmount = threshold >= spatialEnergy ? drawAttackAmount : drawReleaseAmount;
-        spatialEnergy = lerp(spatialEnergy, threshold, activeEnergyAmount);
-        areaRevealShader.set("audioEnergy", spatialEnergy);
-        shader(areaRevealShader);
-      }
-
       for (int i = 0; i < colorNames.length; i++) {
-        if (useSpatialShader) {
-          float revealRadius = getSpatialRevealRadiusForMask(i);
-          spatialRevealShader.set("revealCenter", spatialPositionX[i], spatialPositionY[i]);
-          spatialRevealShader.set("revealRadius", revealRadius);
-          spatialRevealShader.set("revealFeather", revealRadius * spatialEdgeFeatherProportion);
-          spatialRevealShader.set("imageAspect", imgW / imgH);
-          shader(spatialRevealShader);
+        if (useSpotlightShader) {
+          float revealRadius = getSpotlightRevealRadiusForMask(i);
+          spotlightRevealShader.set("revealCenter", spotlightPositionX[i], spotlightPositionY[i]);
+          spotlightRevealShader.set("revealRadius", revealRadius);
+          spotlightRevealShader.set("revealFeather", revealRadius * spotlightEdgeFeatherProportion);
+          spotlightRevealShader.set("imageAspect", imgW / imgH);
+          shader(spotlightRevealShader);
+        } else if (useAreaShader) {
+          areaRevealShader.set("idMap", areaIdMask);
+
+          float maskSeedOffset = spotlightIndependentMaskPositions ? (float)i * 123.456 : 0.0;
+          float timeInSeconds = (float)millis() / 1000.0;
+
+          areaRevealShader.set("audioEnergy", spotlightEnergy);
+          areaRevealShader.set("time", timeInSeconds);
+          areaRevealShader.set("cycleDuration", areaCycleDurationSeconds);
+          areaRevealShader.set("seedOffset", maskSeedOffset);
+          shader(areaRevealShader);
         }
 
         float sInt = solidIntensities[i];
@@ -405,7 +456,7 @@ void draw() {
           bInt -= 1.0;
         }
 
-        if (useSpatialShader) {
+        if (useSpotlightShader) {
           resetShader();
         }
       }
@@ -426,108 +477,88 @@ void draw() {
 
   startAudioPlaybackIfReady();
 
-  if (showVerboseUi) {
-    drawStatusOverlay();
-
-    if (solidSliders != null && bloomSliders != null && baseSlider != null && audioSensSlider != null && allMasksReady && isAudioReady) {
-      audioSensSlider.draw();
-      baseSlider.draw();
-      for (int i = 0; i < colorNames.length; i++) {
-        solidSliders[i].draw();
-        bloomSliders[i].draw();
-      }
-      drawBandMapping();
-    }
-  }
 }
 
 void keyPressed() {
-  if (key == 'v' || key == 'V') {
-    showVerboseUi = !showVerboseUi;
-  } else if (key == 'm' || key == 'M') {
-    int nextMode = (currentRevealMode.ordinal() + 1) % RevealMode.values().length;
-    currentRevealMode = RevealMode.values()[nextMode];
-    if (currentRevealMode == RevealMode.SPATIAL) {
-      lastSpatialMotionUpdateMs = millis() - round(spatialMotionUpdateIntervalMs);
-    }
-  }
+  handleKeyPressed();
 }
 
-void updateSpatialReveal(float currentLevel, int currentMs, float elapsedMs, float attackAmount, float releaseAmount) {
-  if (currentRevealMode == RevealMode.AREA) {
-    if (areaSeedChangeIntervalMs > 0 && (lastAreaSeedUpdateMs == 0 || currentMs - lastAreaSeedUpdateMs >= areaSeedChangeIntervalMs)) {
-      areaShuffleSeed = random(0.0, 1000.0);
-      lastAreaSeedUpdateMs = currentMs;
+void handleKeyPressed() {
+  if (key == 'm' || key == 'M') {
+    int nextMode = (currentRevealMode.ordinal() + 1) % RevealMode.values().length;
+    currentRevealMode = RevealMode.values()[nextMode];
+    if (currentRevealMode == RevealMode.SPOTLIGHT) {
+      lastSpotlightMotionUpdateMs = millis() - round(spotlightMotionUpdateIntervalMs);
     }
-  } else if (currentRevealMode != RevealMode.SPATIAL) {
-    float targetEnergy = constrain(currentLevel * audioSensitivity * spatialEnergyMultiplier, 0.0, 1.0);
-    float energyAmount = targetEnergy >= spatialEnergy ? attackAmount : releaseAmount;
-    spatialEnergy = lerp(spatialEnergy, targetEnergy, energyAmount);
   }
 
-  if (currentRevealMode != RevealMode.SPATIAL) return;
+}
 
-  float targetEnergy = constrain(currentLevel * audioSensitivity * spatialEnergyMultiplier, 0.0, 1.0);
-  float energyAmount = targetEnergy >= spatialEnergy ? attackAmount : releaseAmount;
-  spatialEnergy = lerp(spatialEnergy, targetEnergy, energyAmount);
+void updateSpotlightReveal(float currentLevel, int currentMs, float elapsedMs, float attackAmount, float releaseAmount) {
+  float energyMult = (currentRevealMode == RevealMode.AREA) ? areaEnergyMultiplier : spotlightEnergyMultiplier;
+  float targetEnergy = constrain(currentLevel * audioSensitivity * energyMult, 0.0, 1.0);
+  float energyAmount = targetEnergy >= spotlightEnergy ? attackAmount : releaseAmount;
+  spotlightEnergy = lerp(spotlightEnergy, targetEnergy, energyAmount);
 
-  float minimumArea = spatialMinimumRadius * spatialMinimumRadius;
-  float maximumArea = spatialMaximumRadius * spatialMaximumRadius;
-  spatialRevealRadius = sqrt(lerp(minimumArea, maximumArea, spatialEnergy));
+  if (currentRevealMode != RevealMode.SPOTLIGHT) return;
+
+  float minimumArea = spotlightMinimumRadius * spotlightMinimumRadius;
+  float maximumArea = spotlightMaximumRadius * spotlightMaximumRadius;
+  spotlightRevealRadius = sqrt(lerp(minimumArea, maximumArea, spotlightEnergy));
 
   float imageAspect = imgH > 0.0 ? imgW / imgH : 1.0;
-  if (spatialKeepCirclesInsideImage) {
-    spatialRevealRadius = min(spatialRevealRadius, min(0.5, imageAspect * 0.5));
+  if (spotlightKeepCirclesInsideImage) {
+    spotlightRevealRadius = min(spotlightRevealRadius, min(0.5, imageAspect * 0.5));
   }
 
-  boolean updateTargets = lastSpatialMotionUpdateMs == 0
-    || currentMs - lastSpatialMotionUpdateMs >= spatialMotionUpdateIntervalMs;
-  float motionAmount = spatialMotionSmoothingTimeMs <= 0.0
+  boolean updateTargets = lastSpotlightMotionUpdateMs == 0
+    || currentMs - lastSpotlightMotionUpdateMs >= spotlightMotionUpdateIntervalMs;
+  float motionAmount = spotlightMotionSmoothingTimeMs <= 0.0
     ? 1.0
-    : 1.0 - exp(-elapsedMs / spatialMotionSmoothingTimeMs);
-  int movingPositionCount = spatialIndependentMaskPositions ? colorNames.length : 1;
+    : 1.0 - exp(-elapsedMs / spotlightMotionSmoothingTimeMs);
+  int movingPositionCount = spotlightIndependentMaskPositions ? colorNames.length : 1;
 
-  float horizontalMargin = spatialKeepCirclesInsideImage ? spatialRevealRadius / imageAspect : 0.0;
-  float verticalMargin = spatialKeepCirclesInsideImage ? spatialRevealRadius : 0.0;
+  float horizontalMargin = spotlightKeepCirclesInsideImage ? spotlightRevealRadius / imageAspect : 0.0;
+  float verticalMargin = spotlightKeepCirclesInsideImage ? spotlightRevealRadius : 0.0;
 
   for (int i = 0; i < movingPositionCount; i++) {
     if (updateTargets) {
-      spatialTargetX[i] += randomGaussian() * spatialBrownianStep;
-      spatialTargetY[i] += randomGaussian() * spatialBrownianStep;
+      spotlightTargetX[i] += randomGaussian() * spotlightBrownianStep;
+      spotlightTargetY[i] += randomGaussian() * spotlightBrownianStep;
     }
 
-    spatialTargetX[i] = constrain(spatialTargetX[i], horizontalMargin, 1.0 - horizontalMargin);
-    spatialTargetY[i] = constrain(spatialTargetY[i], verticalMargin, 1.0 - verticalMargin);
-    spatialPositionX[i] = lerp(spatialPositionX[i], spatialTargetX[i], motionAmount);
-    spatialPositionY[i] = lerp(spatialPositionY[i], spatialTargetY[i], motionAmount);
+    spotlightTargetX[i] = constrain(spotlightTargetX[i], horizontalMargin, 1.0 - horizontalMargin);
+    spotlightTargetY[i] = constrain(spotlightTargetY[i], verticalMargin, 1.0 - verticalMargin);
+    spotlightPositionX[i] = lerp(spotlightPositionX[i], spotlightTargetX[i], motionAmount);
+    spotlightPositionY[i] = lerp(spotlightPositionY[i], spotlightTargetY[i], motionAmount);
   }
 
-  if (!spatialIndependentMaskPositions) {
+  if (!spotlightIndependentMaskPositions) {
     for (int i = 1; i < colorNames.length; i++) {
-      spatialPositionX[i] = spatialPositionX[0];
-      spatialPositionY[i] = spatialPositionY[0];
-      spatialTargetX[i] = spatialTargetX[0];
-      spatialTargetY[i] = spatialTargetY[0];
+      spotlightPositionX[i] = spotlightPositionX[0];
+      spotlightPositionY[i] = spotlightPositionY[0];
+      spotlightTargetX[i] = spotlightTargetX[0];
+      spotlightTargetY[i] = spotlightTargetY[0];
     }
   }
 
   if (updateTargets) {
-    lastSpatialMotionUpdateMs = currentMs;
+    lastSpotlightMotionUpdateMs = currentMs;
   }
 }
 
-float getSpatialRevealRadiusForMask(int maskIndex) {
-  if (!spatialKeepCirclesInsideImage || imgH <= 0.0) {
-    return spatialRevealRadius;
+float getSpotlightRevealRadiusForMask(int maskIndex) {
+  if (!spotlightKeepCirclesInsideImage || imgH <= 0.0) {
+    return spotlightRevealRadius;
   }
 
   float imageAspect = imgW / imgH;
-  float distanceToLeft = spatialPositionX[maskIndex] * imageAspect;
-  float distanceToRight = (1.0 - spatialPositionX[maskIndex]) * imageAspect;
-  float distanceToTop = spatialPositionY[maskIndex];
-  float distanceToBottom = 1.0 - spatialPositionY[maskIndex];
+  float distanceToLeft = spotlightPositionX[maskIndex] * imageAspect;
+  float distanceToRight = (1.0 - spotlightPositionX[maskIndex]) * imageAspect;
+  float distanceToTop = spotlightPositionY[maskIndex];
+  float distanceToBottom = 1.0 - spotlightPositionY[maskIndex];
   float edgeLimitedRadius = min(min(distanceToLeft, distanceToRight), min(distanceToTop, distanceToBottom));
-  return max(0.0, min(spatialRevealRadius, edgeLimitedRadius));
+  return max(0.0, min(spotlightRevealRadius, edgeLimitedRadius));
 }
 
 void startAudioPlaybackIfReady() {
@@ -566,41 +597,40 @@ String formatFrequency(float frequency) {
   return nf(frequency, 1, 0) + " Hz";
 }
 
-void drawBandMapping() {
+void drawBandMapping(PApplet app, float panelTop) {
   int maxBin = getMaxAnalysisBin();
   float binWidth = audioSampleRate / actualAudioBufferSize;
   float effectiveMaxFrequency = min(maxFftFrequency, audioSampleRate * 0.5);
   String heading = "FFT BANDS — " + nf(audioSampleRate, 1, 0) + " Hz, " + actualAudioBufferSize + " samples, max " + formatFrequency(effectiveMaxFrequency) + ", curve " + nf(frequencyMappingExponent, 1, 2);
   String[] bandLabels = new String[colorNames.length];
 
-  pushStyle();
-  textSize(14);
-  float panelWidth = textWidth(heading);
+  app.pushStyle();
+  app.textSize(18);
+  float panelWidth = app.textWidth(heading);
   for (int i = 0; i < colorNames.length; i++) {
     float startFrequency = getBandStartBin(i, maxBin) * binWidth;
     float endFrequency = min(getBandEndBin(i, maxBin) * binWidth, effectiveMaxFrequency);
     bandLabels[i] = colorNames[i].toUpperCase() + ": " + formatFrequency(startFrequency) + " - " + formatFrequency(endFrequency);
-    panelWidth = max(panelWidth, textWidth(bandLabels[i]));
+    panelWidth = max(panelWidth, app.textWidth(bandLabels[i]));
   }
 
   float padding = 12;
-  float panelTop = 60;
-  float rowHeight = 22;
+  float rowHeight = 30;
   float panelHeight = 38 + colorNames.length * rowHeight;
-  noStroke();
-  fill(0, 190);
-  rect(width - panelWidth - padding * 2, panelTop, panelWidth + padding * 2, panelHeight);
+  app.noStroke();
+  app.fill(0, 190);
+  app.rect(app.width - panelWidth - padding * 2, panelTop, panelWidth + padding * 2, panelHeight);
 
-  fill(255);
-  textAlign(RIGHT, TOP);
-  text(heading, width - padding, panelTop + 8);
+  app.fill(255);
+  app.textAlign(RIGHT, TOP);
+  app.text(heading, app.width - padding, panelTop + 8);
   for (int i = 0; i < colorNames.length; i++) {
-    text(bandLabels[i], width - padding, panelTop + 30 + i * rowHeight);
+    app.text(bandLabels[i], app.width - padding, panelTop + 30 + i * rowHeight);
   }
-  popStyle();
+  app.popStyle();
 }
 
-void drawStatusOverlay() {
+void drawStatusOverlay(PApplet app, float panelTop) {
   String maskStatus;
   if (!masksDecoded) {
     maskStatus = "PRELOADING MASKS: " + masksDecodedCount + "/" + colorNames.length;
@@ -611,28 +641,28 @@ void drawStatusOverlay() {
   }
   maskStatus += " | MODE: " + currentRevealMode.name() + " (M)";
 
-  String fpsStatus = "FPS: " + nf(frameRate, 0, 1);
+  String fpsStatus = "FPS: " + app.nf(app.frameRate, 0, 1);
   if (currentRevealMode != RevealMode.FULL) {
-    fpsStatus += " | ENERGY: " + nf(spatialEnergy * 100.0, 0, 0) + "%";
+    fpsStatus += " | ENERGY: " + nf(spotlightEnergy * 100.0, 0, 0) + "%";
   }
   String combinedStatus = maskStatus + "   " + fpsStatus;
 
   float padding = 18;
   float boxHeight = 44;
 
-  blendMode(BLEND);
-  noTint();
-  textSize(24);
+  app.blendMode(BLEND);
+  app.noTint();
+  app.textSize(24);
 
   // Dark translucent background keeps the green text readable over bright imagery.
-  noStroke();
-  fill(0, 190);
-  float boxWidth = textWidth(combinedStatus) + padding * 2;
-  rect(width - boxWidth, 0, boxWidth, boxHeight);
+  app.noStroke();
+  app.fill(0, 190);
+  float boxWidth = app.textWidth(combinedStatus) + padding * 2;
+  app.rect(app.width - boxWidth, panelTop, boxWidth, boxHeight);
 
-  fill(0, 255, 80);
-  textAlign(RIGHT, TOP);
-  text(combinedStatus, width - padding, 8);
+  app.fill(0, 255, 80);
+  app.textAlign(RIGHT, TOP);
+  app.text(combinedStatus, app.width - padding, panelTop + 8);
 }
 
 void preloadMasks() {
@@ -669,6 +699,266 @@ void warmUpNextMaskPair() {
   }
 }
 
+class ControlsWindow extends PApplet {
+  float diagnosticsTop;
+  float sectionContentTop;
+  int activeSection = 0;
+  Button[] modeButtons;
+  Button[] sectionButtons;
+  Button spotlightIndependentButton;
+  Button spotlightKeepInsideButton;
+  Slider editingSlider;
+
+  void settings() {
+    size(controlsWindowWidth, controlsWindowHeight, P2D);
+  }
+
+  void setup() {
+    surface.setTitle("Music Visualizer Controls");
+    surface.setResizable(true);
+    surface.setLocation(40, 40);
+    frameRate(fps);
+
+    solidSliders = new Slider[colorNames.length];
+    bloomSliders = new Slider[colorNames.length];
+    audioSensSlider = new Slider("AUDIO SENSITIVITY", 0, 0, 0, 0, 0.0, 20.0, initialAudioSensitivity);
+    baseSlider = new Slider("BASE IMAGE", 0, 0, 0, 0, 0.0, 1.0, baseIntensity);
+
+    for (int i = 0; i < colorNames.length; i++) {
+      solidSliders[i] = new Slider(colorNames[i].toUpperCase() + " SOLID", 0, 0, 0, 0, 0.0, 5.0, solidIntensities[i]);
+      bloomSliders[i] = new Slider(colorNames[i].toUpperCase() + " BLOOM", 0, 0, 0, 0, 0.0, 5.0, bloomIntensities[i]);
+    }
+
+    audioResponseSliders = new RuntimeSlider[] {
+      new RuntimeSlider("FFT MAX FREQUENCY", "maxFftFrequency", 1.0, 192000.0),
+      new RuntimeSlider("FREQUENCY CURVE", "frequencyMappingExponent", 0.1, 20.0),
+      new RuntimeSlider("BAND MULTIPLIER", "audioBandMultiplier", 0.0, 100.0),
+      new RuntimeSlider("BLOOM MULTIPLIER", "audioBloomMultiplier", 0.0, 100.0),
+      new RuntimeSlider("BASE AUDIO BOOST", "audioBaseIntensityScale", 0.0, 100.0),
+      new RuntimeSlider("SILENCE FLOOR", "baseImageSilenceFloor", 0.0, 1.0),
+      new RuntimeSlider("ATTACK (MS)", "audioAttackTimeMs", 0.0, 60000.0),
+      new RuntimeSlider("RELEASE (MS)", "audioReleaseTimeMs", 0.0, 60000.0)
+    };
+    spotlightRevealSliders = new RuntimeSlider[] {
+      new RuntimeSlider("ENERGY MULTIPLIER", "spotlightEnergyMultiplier", 0.0, 100.0),
+      new RuntimeSlider("MINIMUM RADIUS", "spotlightMinimumRadius", 0.0, 2.0),
+      new RuntimeSlider("MAXIMUM RADIUS", "spotlightMaximumRadius", 0.0, 2.0),
+      new RuntimeSlider("EDGE FEATHER", "spotlightEdgeFeatherProportion", 0.0, 1.0),
+      new RuntimeSlider("MOTION INTERVAL (MS)", "spotlightMotionUpdateIntervalMs", 1.0, 60000.0),
+      new RuntimeSlider("BROWNIAN STEP", "spotlightBrownianStep", 0.0, 1.0),
+      new RuntimeSlider("MOTION SMOOTHING (MS)", "spotlightMotionSmoothingTimeMs", 0.0, 60000.0)
+    };
+    areaRevealSliders = new RuntimeSlider[] {
+      new RuntimeSlider("ENERGY MULTIPLIER", "areaEnergyMultiplier", 0.0, 100.0),
+      new RuntimeSlider("CYCLE DURATION (SECONDS)", "areaCycleDurationSeconds", 0.1, 86400.0)
+    };
+
+    modeButtons = new Button[] {
+      new Button("FULL"),
+      new Button("SPOTLIGHT"),
+      new Button("AREA")
+    };
+    sectionButtons = new Button[] {
+      new Button("MASK INTENSITY"),
+      new Button("AUDIO RESPONSE"),
+      new Button("SPOTLIGHT REVEAL"),
+      new Button("AREA REVEAL")
+    };
+    spotlightIndependentButton = new Button("INDEPENDENT MASK POSITIONS");
+    spotlightKeepInsideButton = new Button("KEEP CIRCLES INSIDE IMAGE");
+  }
+
+  void draw() {
+    background(24);
+
+    if (audioSensSlider == null || baseSlider == null || solidSliders == null || bloomSliders == null) return;
+    layoutControls();
+
+    updateButtons();
+    drawButtons();
+    layoutActiveSection();
+    updateActiveSection();
+    audioSensitivity = audioSensSlider.val;
+    baseIntensity = constrain(baseSlider.val + currentAudioLevel * audioBaseIntensityScale * audioSensitivity, 0.0, 1.0);
+    drawActiveSection();
+
+    drawStatusOverlay(this, diagnosticsTop);
+    if (isAudioReady) drawBandMapping(this, diagnosticsTop + 54);
+  }
+
+  void layoutControls() {
+    float margin = 42.0;
+    float diagnosticsHeight = 270.0;
+    diagnosticsTop = max(330.0, height - diagnosticsHeight);
+    float buttonGap = 12.0;
+    float modeWidth = (width - margin * 2.0 - buttonGap * 2.0) / 3.0;
+    for (int i = 0; i < modeButtons.length; i++) {
+      modeButtons[i].setBounds(margin + i * (modeWidth + buttonGap), 30.0, modeWidth, 54.0);
+    }
+
+    float sectionWidth = (width - margin * 2.0 - buttonGap * 3.0) / 4.0;
+    for (int i = 0; i < sectionButtons.length; i++) {
+      sectionButtons[i].setBounds(margin + i * (sectionWidth + buttonGap), 106.0, sectionWidth, 54.0);
+    }
+    sectionContentTop = sectionButtons[0].y + sectionButtons[0].h + 65.0;
+  }
+
+  void updateButtons() {
+    for (int i = 0; i < modeButtons.length; i++) {
+      if (modeButtons[i].update(mouseX, mouseY, mousePressed)) {
+        currentRevealMode = RevealMode.values()[i];
+        if (currentRevealMode == RevealMode.SPOTLIGHT) {
+          lastSpotlightMotionUpdateMs = millis() - round(spotlightMotionUpdateIntervalMs);
+        }
+      }
+    }
+    for (int i = 0; i < sectionButtons.length; i++) {
+      if (sectionButtons[i].update(mouseX, mouseY, mousePressed)) activeSection = i;
+    }
+    if (activeSection == 2) {
+      if (spotlightIndependentButton.update(mouseX, mouseY, mousePressed)) {
+        spotlightIndependentMaskPositions = !spotlightIndependentMaskPositions;
+      }
+      if (spotlightKeepInsideButton.update(mouseX, mouseY, mousePressed)) {
+        spotlightKeepCirclesInsideImage = !spotlightKeepCirclesInsideImage;
+      }
+    }
+  }
+
+  void drawButtons() {
+    for (int i = 0; i < modeButtons.length; i++) {
+      modeButtons[i].draw(this, currentRevealMode.ordinal() == i);
+    }
+    for (int i = 0; i < sectionButtons.length; i++) {
+      sectionButtons[i].draw(this, activeSection == i);
+    }
+  }
+
+  void updateActiveSection() {
+    if (editingSlider == null) {
+      Slider[] activeSliders = getActiveSliders();
+      for (Slider slider : activeSliders) {
+        if (slider.beginEditing(mouseX, mouseY, mousePressed)) {
+          editingSlider = slider;
+          return;
+        }
+      }
+    } else {
+      return;
+    }
+
+    if (activeSection == 0) {
+      audioSensSlider.update(mouseX, mouseY, mousePressed);
+      baseSlider.update(mouseX, mouseY, mousePressed);
+      for (int i = 0; i < colorNames.length; i++) {
+        solidSliders[i].update(mouseX, mouseY, mousePressed);
+        bloomSliders[i].update(mouseX, mouseY, mousePressed);
+      }
+    } else if (activeSection == 1) {
+      updateRuntimeSliders(audioResponseSliders);
+    } else if (activeSection == 2) {
+      updateRuntimeSliders(spotlightRevealSliders);
+    } else {
+      updateRuntimeSliders(areaRevealSliders);
+    }
+  }
+
+  Slider[] getActiveSliders() {
+    if (activeSection == 0) {
+      Slider[] visualSliders = new Slider[2 + colorNames.length * 2];
+      visualSliders[0] = audioSensSlider;
+      visualSliders[1] = baseSlider;
+      for (int i = 0; i < colorNames.length; i++) {
+        visualSliders[i * 2 + 2] = solidSliders[i];
+        visualSliders[i * 2 + 3] = bloomSliders[i];
+      }
+      return visualSliders;
+    }
+    if (activeSection == 1) return audioResponseSliders;
+    if (activeSection == 2) return spotlightRevealSliders;
+    return areaRevealSliders;
+  }
+
+  void drawActiveSection() {
+    if (activeSection == 0) {
+      audioSensSlider.draw(this);
+      baseSlider.draw(this);
+      for (int i = 0; i < colorNames.length; i++) {
+        solidSliders[i].draw(this);
+        bloomSliders[i].draw(this);
+      }
+    } else if (activeSection == 1) {
+      drawRuntimeSliders(audioResponseSliders);
+    } else if (activeSection == 2) {
+      drawRuntimeSliders(spotlightRevealSliders);
+      spotlightIndependentButton.draw(this, spotlightIndependentMaskPositions);
+      spotlightKeepInsideButton.draw(this, spotlightKeepCirclesInsideImage);
+    } else {
+      drawRuntimeSliders(areaRevealSliders);
+    }
+  }
+
+  void layoutActiveSection() {
+    if (activeSection == 0) {
+      Slider[] visualSliders = new Slider[2 + colorNames.length * 2];
+      visualSliders[0] = audioSensSlider;
+      visualSliders[1] = baseSlider;
+      for (int i = 0; i < colorNames.length; i++) {
+        visualSliders[i * 2 + 2] = solidSliders[i];
+        visualSliders[i * 2 + 3] = bloomSliders[i];
+      }
+      layoutSliders(visualSliders, sectionContentTop);
+    } else if (activeSection == 1) {
+      layoutSliders(audioResponseSliders, sectionContentTop);
+    } else if (activeSection == 2) {
+      int controlRows = spotlightRevealSliders.length + 1;
+      layoutSliders(spotlightRevealSliders, sectionContentTop, controlRows);
+      float y = sectionContentTop + sliderRowSpacing(controlRows) * spotlightRevealSliders.length + 8.0;
+      float buttonWidth = (width - 96.0) * 0.5;
+      spotlightIndependentButton.setBounds(42.0, y, buttonWidth, 52.0);
+      spotlightKeepInsideButton.setBounds(54.0 + buttonWidth, y, buttonWidth, 52.0);
+    } else {
+      layoutSliders(areaRevealSliders, sectionContentTop);
+    }
+  }
+
+  void layoutSliders(Slider[] sliders, float top) {
+    layoutSliders(sliders, top, sliders.length);
+  }
+
+  void layoutSliders(Slider[] sliders, float top, int controlRows) {
+    float margin = 42.0;
+    float rowSpacing = sliderRowSpacing(controlRows);
+    float touchDiameter = constrain(rowSpacing * 0.62, 22.0, 36.0);
+    float sliderWidth = max(160.0, width - margin * 2.0);
+    for (int i = 0; i < sliders.length; i++) {
+      sliders[i].setBounds(margin, top + i * rowSpacing, sliderWidth, touchDiameter);
+    }
+  }
+
+  float sliderRowSpacing(int controlCount) {
+    return (diagnosticsTop - sectionContentTop) / max(1, controlCount);
+  }
+
+  void updateRuntimeSliders(RuntimeSlider[] sliders) {
+    for (RuntimeSlider slider : sliders) slider.updateAndApply(mouseX, mouseY, mousePressed);
+  }
+
+  void drawRuntimeSliders(RuntimeSlider[] sliders) {
+    for (RuntimeSlider slider : sliders) slider.draw(this);
+  }
+
+  void keyPressed() {
+    if (editingSlider != null) {
+      boolean escapePressed = keyCode == ESC;
+      if (editingSlider.handleKey(key, keyCode)) editingSlider = null;
+      if (escapePressed) key = 0;
+      return;
+    }
+    handleKeyPressed();
+  }
+}
+
 class Slider {
   float x, y, w, h;
   float minVal, maxVal;
@@ -676,6 +966,9 @@ class Slider {
   String label;
   boolean dragging = false;
   boolean wasPressed = false;
+  boolean editing = false;
+  String editText = "";
+  boolean replaceEditText = false;
 
   Slider(String label, float x, float y, float w, float h, float minVal, float maxVal, float defaultVal) {
     this.label = label;
@@ -686,6 +979,13 @@ class Slider {
     this.minVal = minVal;
     this.maxVal = maxVal;
     this.val = defaultVal;
+  }
+
+  void setBounds(float x, float y, float w, float h) {
+    this.x = x;
+    this.y = y;
+    this.w = w;
+    this.h = h;
   }
 
   void update(int mx, int my, boolean mPressed) {
@@ -705,21 +1005,196 @@ class Slider {
     wasPressed = mPressed;
   }
 
-  void draw() {
-    pushStyle();
-    fill(100, 200);
-    noStroke();
-    rect(x, y - 2, w, 4);
-    fill(200, 200);
-    float px = map(val, minVal, maxVal, x, x + w);
-    rect(x, y - 2, px - x, 4);
-    fill(255);
-    ellipse(px, y, h, h);
-    fill(255);
-    textAlign(LEFT, CENTER);
-    textSize(14);
-    text(label + ": " + nf(val, 1, 2), x + w + 15, y);
-    popStyle();
+  boolean beginEditing(int mx, int my, boolean mPressed) {
+    if (!mPressed || wasPressed || !isValueFieldHit(mx, my)) return false;
+    editText = nf(val, 1, 2);
+    editing = true;
+    replaceEditText = true;
+    return true;
+  }
+
+  boolean handleKey(char typedKey, int typedKeyCode) {
+    if (typedKeyCode == ENTER || typedKeyCode == RETURN) {
+      try {
+        applyEditedValue(Float.parseFloat(editText));
+        editing = false;
+        replaceEditText = false;
+        return true;
+      }
+      catch (NumberFormatException error) {
+        println("Invalid value for " + label + ": " + editText);
+        return false;
+      }
+    }
+    if (typedKeyCode == ESC) {
+      editing = false;
+      replaceEditText = false;
+      return true;
+    }
+    if (typedKeyCode == BACKSPACE) {
+      if (replaceEditText) {
+        editText = "";
+        replaceEditText = false;
+        return false;
+      }
+      if (editText.length() > 0) editText = editText.substring(0, editText.length() - 1);
+      return false;
+    }
+    if (typedKey >= '0' && typedKey <= '9' || typedKey == '.' || typedKey == '-' || typedKey == '+' || typedKey == 'e' || typedKey == 'E') {
+      if (replaceEditText) {
+        editText = "";
+        replaceEditText = false;
+      }
+      editText += typedKey;
+    }
+    return false;
+  }
+
+  void applyEditedValue(float value) {
+    val = constrain(value, minVal, maxVal);
+  }
+
+  float valueFieldWidth() {
+    return constrain(w * 0.18, 110.0, 160.0);
+  }
+
+  float valueFieldHeight() {
+    return max(28.0, h * 0.8);
+  }
+
+  float valueFieldX() {
+    return x + w - valueFieldWidth();
+  }
+
+  float valueFieldY() {
+    return y - h * 0.68 - valueFieldHeight();
+  }
+
+  boolean isValueFieldHit(int mx, int my) {
+    return mx >= valueFieldX() && mx <= valueFieldX() + valueFieldWidth()
+      && my >= valueFieldY() && my <= valueFieldY() + valueFieldHeight();
+  }
+
+  void draw(PApplet app) {
+    app.pushStyle();
+    app.fill(100, 200);
+    app.noStroke();
+    float trackHeight = max(8.0, h * 0.2);
+    app.rect(x, y - trackHeight * 0.5, w, trackHeight);
+    app.fill(200, 200);
+    float px = app.map(val, minVal, maxVal, x, x + w);
+    app.rect(x, y - trackHeight * 0.5, px - x, trackHeight);
+    app.fill(255);
+    app.ellipse(px, y, h, h);
+    app.fill(255);
+    app.textAlign(LEFT, BOTTOM);
+    app.textSize(max(18.0, h * 0.52));
+    app.text(label, x, y - h * 0.68);
+    app.fill(editing ? app.color(45, 125, 185) : app.color(55, 55, 62));
+    app.rect(valueFieldX(), valueFieldY(), valueFieldWidth(), valueFieldHeight(), 6);
+    app.fill(255);
+    app.textAlign(CENTER, CENTER);
+    app.text(editing ? editText : app.nf(val, 1, 2), valueFieldX() + valueFieldWidth() * 0.5, valueFieldY() + valueFieldHeight() * 0.5);
+    app.popStyle();
+  }
+}
+
+class RuntimeSlider extends Slider {
+  String parameter;
+
+  RuntimeSlider(String label, String parameter, float minVal, float maxVal) {
+    super(label, 0, 0, 0, 0, minVal, maxVal, 0.0);
+    this.parameter = parameter;
+    val = getParameterValue();
+  }
+
+  void updateAndApply(int mx, int my, boolean mPressed) {
+    if (!dragging) val = getParameterValue();
+    update(mx, my, mPressed);
+    setParameterValue(val);
+    val = getParameterValue();
+  }
+
+  float getParameterValue() {
+    if (parameter.equals("maxFftFrequency")) return maxFftFrequency;
+    if (parameter.equals("frequencyMappingExponent")) return frequencyMappingExponent;
+    if (parameter.equals("audioBandMultiplier")) return audioBandMultiplier;
+    if (parameter.equals("audioBloomMultiplier")) return audioBloomMultiplier;
+    if (parameter.equals("audioBaseIntensityScale")) return audioBaseIntensityScale;
+    if (parameter.equals("baseImageSilenceFloor")) return baseImageSilenceFloor;
+    if (parameter.equals("audioAttackTimeMs")) return audioAttackTimeMs;
+    if (parameter.equals("audioReleaseTimeMs")) return audioReleaseTimeMs;
+    if (parameter.equals("spotlightEnergyMultiplier")) return spotlightEnergyMultiplier;
+    if (parameter.equals("spotlightMinimumRadius")) return spotlightMinimumRadius;
+    if (parameter.equals("spotlightMaximumRadius")) return spotlightMaximumRadius;
+    if (parameter.equals("spotlightEdgeFeatherProportion")) return spotlightEdgeFeatherProportion;
+    if (parameter.equals("spotlightMotionUpdateIntervalMs")) return spotlightMotionUpdateIntervalMs;
+    if (parameter.equals("spotlightBrownianStep")) return spotlightBrownianStep;
+    if (parameter.equals("spotlightMotionSmoothingTimeMs")) return spotlightMotionSmoothingTimeMs;
+    if (parameter.equals("areaEnergyMultiplier")) return areaEnergyMultiplier;
+    if (parameter.equals("areaCycleDurationSeconds")) return areaCycleDurationSeconds;
+    return minVal;
+  }
+
+  void setParameterValue(float value) {
+    if (parameter.equals("maxFftFrequency")) maxFftFrequency = value;
+    else if (parameter.equals("frequencyMappingExponent")) frequencyMappingExponent = value;
+    else if (parameter.equals("audioBandMultiplier")) audioBandMultiplier = value;
+    else if (parameter.equals("audioBloomMultiplier")) audioBloomMultiplier = value;
+    else if (parameter.equals("audioBaseIntensityScale")) audioBaseIntensityScale = value;
+    else if (parameter.equals("baseImageSilenceFloor")) baseImageSilenceFloor = value;
+    else if (parameter.equals("audioAttackTimeMs")) audioAttackTimeMs = value;
+    else if (parameter.equals("audioReleaseTimeMs")) audioReleaseTimeMs = value;
+    else if (parameter.equals("spotlightEnergyMultiplier")) spotlightEnergyMultiplier = value;
+    else if (parameter.equals("spotlightMinimumRadius")) spotlightMinimumRadius = min(value, spotlightMaximumRadius);
+    else if (parameter.equals("spotlightMaximumRadius")) spotlightMaximumRadius = max(value, spotlightMinimumRadius);
+    else if (parameter.equals("spotlightEdgeFeatherProportion")) spotlightEdgeFeatherProportion = value;
+    else if (parameter.equals("spotlightMotionUpdateIntervalMs")) spotlightMotionUpdateIntervalMs = value;
+    else if (parameter.equals("spotlightBrownianStep")) spotlightBrownianStep = value;
+    else if (parameter.equals("spotlightMotionSmoothingTimeMs")) spotlightMotionSmoothingTimeMs = value;
+    else if (parameter.equals("areaEnergyMultiplier")) areaEnergyMultiplier = value;
+    else if (parameter.equals("areaCycleDurationSeconds")) areaCycleDurationSeconds = value;
+  }
+
+  void applyEditedValue(float value) {
+    val = constrain(value, minVal, maxVal);
+    setParameterValue(val);
+    val = getParameterValue();
+  }
+}
+
+class Button {
+  String label;
+  float x, y, w, h;
+  boolean wasPressed;
+
+  Button(String label) {
+    this.label = label;
+  }
+
+  void setBounds(float x, float y, float w, float h) {
+    this.x = x;
+    this.y = y;
+    this.w = w;
+    this.h = h;
+  }
+
+  boolean update(int mx, int my, boolean mPressed) {
+    boolean clicked = mPressed && !wasPressed && mx >= x && mx <= x + w && my >= y && my <= y + h;
+    wasPressed = mPressed;
+    return clicked;
+  }
+
+  void draw(PApplet app, boolean selected) {
+    app.pushStyle();
+    app.noStroke();
+    app.fill(selected ? app.color(30, 150, 210) : app.color(70, 70, 76));
+    app.rect(x, y, w, h, 10);
+    app.fill(255);
+    app.textAlign(CENTER, CENTER);
+    app.textSize(min(20.0, max(14.0, h * 0.35)));
+    app.text(label, x + w * 0.5, y + h * 0.5);
+    app.popStyle();
   }
 }
 

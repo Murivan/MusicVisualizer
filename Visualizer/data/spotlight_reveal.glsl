@@ -14,6 +14,7 @@ uniform float imageAspect;
 varying vec4 vertColor;
 varying vec4 vertTexCoord;
 
+// Soft radial alpha mask for the Spotlight reveal mode.
 void main() {
   vec4 color = texture2D(texture, vertTexCoord.st) * vertColor;
   vec2 offset = vertTexCoord.st - revealCenter;
