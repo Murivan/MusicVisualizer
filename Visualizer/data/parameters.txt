@@ -14,6 +14,9 @@ fps=30
 
 # Audio analysis
 audioBufferSize=2048
+# Color masks and low-to-high FFT-band mapping. Use unique initials: B=blue, C=cyan,
+# R=red, O=orange, Y=yellow, G=green, M=magenta. The current setting uses BCROY.
+colorBandMapping=BCROY
 maxFftFrequency=16000.0
 frequencyMappingExponent=3.0
 audioBandMultiplier=0.1

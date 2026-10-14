@@ -95,13 +95,8 @@ float areaEnergyMultiplier = 2.0;               // Scales audio level before con
 float areaCycleDurationSeconds = 12.0;          // How fast the random areas evolve and cycle (seconds)
 
 
-// Different mappings can be obtained changing the order of the color names in this array.
-String[] colorNames = {
-  // "red", "orange", "yellow", "green", "cyan", "blue", "magenta"
-  // "magenta", "blue", "cyan", "green", "yellow", "orange", "red"
-  // "magenta", "blue", "green", "cyan", "red", "orange", "yellow"
-  "blue", "cyan", "red", "orange", "yellow"
-};
+String colorBandMapping = "BCROY";
+String[] colorNames = getColorNames(colorBandMapping);
 float[] solidIntensities = new float[colorNames.length];
 float[] bloomIntensities = new float[colorNames.length];
 float[] releasedBandIntensities = new float[colorNames.length];
@@ -277,6 +272,7 @@ void loadParameters() {
   controlsWindowWidth = getIntParameter(parameters, "controlsWindowWidth", controlsWindowWidth, 320, 4096);
   controlsWindowHeight = getIntParameter(parameters, "controlsWindowHeight", controlsWindowHeight, 240, 4096);
   fps = getIntParameter(parameters, "fps", fps, 1, 240);
+  configureColorBandMapping(parameters.getProperty("colorBandMapping", colorBandMapping));
   int requestedBufferSize = getIntParameter(parameters, "audioBufferSize", audioBufferSize, 32, 65536);
   if ((requestedBufferSize & (requestedBufferSize - 1)) == 0) {
     audioBufferSize = requestedBufferSize;
@@ -311,6 +307,62 @@ void loadParameters() {
 
   areaEnergyMultiplier = getFloatParameter(parameters, "areaEnergyMultiplier", areaEnergyMultiplier, 0.0, 100.0);
   areaCycleDurationSeconds = getFloatParameter(parameters, "areaCycleDurationSeconds", areaCycleDurationSeconds, 0.1, 86400.0);
+}
+
+void configureColorBandMapping(String mapping) {
+  String normalizedMapping = mapping.replaceAll("\\s", "").toUpperCase();
+  String[] configuredColors = getColorNames(normalizedMapping);
+  if (configuredColors == null) {
+    println("Ignoring invalid colorBandMapping=" + mapping + ". Use unique initials from B, C, R, O, Y, G, M.");
+    return;
+  }
+
+  colorBandMapping = normalizedMapping;
+  colorNames = configuredColors;
+  solidIntensities = new float[colorNames.length];
+  bloomIntensities = new float[colorNames.length];
+  releasedBandIntensities = new float[colorNames.length];
+  spotlightPositionX = new float[colorNames.length];
+  spotlightPositionY = new float[colorNames.length];
+  spotlightTargetX = new float[colorNames.length];
+  spotlightTargetY = new float[colorNames.length];
+}
+
+String[] getColorNames(String mapping) {
+  if (mapping == null || mapping.length() == 0) return null;
+
+  String[] names = new String[mapping.length()];
+  boolean[] usedInitials = new boolean[7];
+  for (int i = 0; i < mapping.length(); i++) {
+    char initial = mapping.charAt(i);
+    int initialIndex = getColorInitialIndex(initial);
+    if (initialIndex < 0 || usedInitials[initialIndex]) return null;
+
+    usedInitials[initialIndex] = true;
+    names[i] = getColorName(initial);
+  }
+  return names;
+}
+
+int getColorInitialIndex(char initial) {
+  if (initial == 'B') return 0;
+  if (initial == 'C') return 1;
+  if (initial == 'R') return 2;
+  if (initial == 'O') return 3;
+  if (initial == 'Y') return 4;
+  if (initial == 'G') return 5;
+  if (initial == 'M') return 6;
+  return -1;
+}
+
+String getColorName(char initial) {
+  if (initial == 'B') return "blue";
+  if (initial == 'C') return "cyan";
+  if (initial == 'R') return "red";
+  if (initial == 'O') return "orange";
+  if (initial == 'Y') return "yellow";
+  if (initial == 'G') return "green";
+  return "magenta";
 }
 
 int getIntParameter(Properties parameters, String name, int defaultValue, int minimum, int maximum) {
