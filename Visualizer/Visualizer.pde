@@ -8,6 +8,7 @@ import ddf.minim.ugens.*;
 import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.Mixer;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Properties;
 
 import javax.swing.JFileChooser;
@@ -23,6 +24,7 @@ import java.awt.Rectangle;
 
 PImage baseImg;
 PImage areaIdMask;
+PImage areaCenterMap;
 PImage[] solidMasks;
 PImage[] bloomMasks;
 PShader spotlightRevealShader;
@@ -73,6 +75,12 @@ enum RevealMode {
 }
 RevealMode currentRevealMode = RevealMode.FULL;
 
+enum AreaRevealStyle {
+  WHOLE_TILE,
+  CENTER_GLOW,
+  TRAIL
+}
+
 // Full/Global settings
 float audioAttackTimeMs = 50.0;       // Time constant for colored areas to rise toward a higher audio level
 float audioReleaseTimeMs = 500.0;     // Time constant for colored areas to fade after their audio level falls
@@ -93,6 +101,7 @@ boolean spotlightKeepCirclesInsideImage = true;   // Recenter and limit spotligh
 // Area Reveal Mode
 float areaEnergyMultiplier = 2.0;               // Scales audio level before converting it to probability threshold
 float areaCycleDurationSeconds = 12.0;          // How fast the random areas evolve and cycle (seconds)
+AreaRevealStyle areaRevealStyle = AreaRevealStyle.WHOLE_TILE;
 
 
 String colorBandMapping = "BCROY";
@@ -107,6 +116,7 @@ int lastAudioResponseMs = 0;
 
 float spotlightEnergy = 0.0;
 float spotlightRevealRadius = 0.0;
+float areaTrailProgress = 0.0;
 float[] spotlightPositionX = new float[colorNames.length];
 float[] spotlightPositionY = new float[colorNames.length];
 float[] spotlightTargetX = new float[colorNames.length];
@@ -213,6 +223,7 @@ void setup() {
   // Setup GPU shaders and masks
   baseImg = loadImage("window_base.png");
   areaIdMask = loadImage("mask_area_ids.png");
+  areaCenterMap = createAreaCenterMap(areaIdMask);
   spotlightRevealShader = loadShader("spotlight_reveal.glsl");
   spotlightBaseRevealShader = loadShader("spotlight_base_reveal.glsl");
   areaRevealShader = loadShader("area_reveal.glsl");
@@ -307,6 +318,102 @@ void loadParameters() {
 
   areaEnergyMultiplier = getFloatParameter(parameters, "areaEnergyMultiplier", areaEnergyMultiplier, 0.0, 100.0);
   areaCycleDurationSeconds = getFloatParameter(parameters, "areaCycleDurationSeconds", areaCycleDurationSeconds, 0.1, 86400.0);
+  areaRevealStyle = getAreaRevealStyle(parameters);
+}
+
+AreaRevealStyle getAreaRevealStyle(Properties parameters) {
+  String value = parameters.getProperty("areaRevealStyle");
+  if (value == null) {
+    return getBooleanParameter(parameters, "areaCenterGlow", false)
+      ? AreaRevealStyle.CENTER_GLOW
+      : AreaRevealStyle.WHOLE_TILE;
+  }
+
+  String normalizedValue = value.trim().toUpperCase();
+  if (normalizedValue.equals("CENTER_GLOW")) return AreaRevealStyle.CENTER_GLOW;
+  if (normalizedValue.equals("TRAIL")) return AreaRevealStyle.TRAIL;
+  if (normalizedValue.equals("WHOLE_TILE")) return AreaRevealStyle.WHOLE_TILE;
+
+  println("Ignoring invalid areaRevealStyle=" + value + ". Use WHOLE_TILE, CENTER_GLOW, or TRAIL.");
+  return AreaRevealStyle.WHOLE_TILE;
+}
+
+PImage createAreaCenterMap(PImage idMap) {
+  if (idMap == null) return null;
+
+  idMap.loadPixels();
+  HashMap<Integer, TileGeometry> tiles = new HashMap<Integer, TileGeometry>();
+  for (int y = 0; y < idMap.height; y++) {
+    for (int x = 0; x < idMap.width; x++) {
+      int index = y * idMap.width + x;
+      int tileId = idMap.pixels[index] & 0x00FFFFFF;
+      if (tileId == 0) continue;
+
+      TileGeometry tile = tiles.get(tileId);
+      if (tile == null) {
+        tile = new TileGeometry();
+        tiles.put(tileId, tile);
+      }
+      tile.add(x, y);
+    }
+  }
+
+  float imageAspect = idMap.width / (float)idMap.height;
+  float radiusScale = max(1.0, imageAspect);
+  for (TileGeometry tile : tiles.values()) {
+    tile.finish(idMap.width, idMap.height, imageAspect);
+  }
+  for (int y = 0; y < idMap.height; y++) {
+    for (int x = 0; x < idMap.width; x++) {
+      TileGeometry tile = tiles.get(idMap.pixels[y * idMap.width + x] & 0x00FFFFFF);
+      if (tile != null) tile.measureRadius(x, y, idMap.width, idMap.height, imageAspect);
+    }
+  }
+
+  PImage centerMap = createImage(idMap.width, idMap.height, RGB);
+  centerMap.loadPixels();
+  for (int y = 0; y < idMap.height; y++) {
+    for (int x = 0; x < idMap.width; x++) {
+      int index = y * idMap.width + x;
+      TileGeometry tile = tiles.get(idMap.pixels[index] & 0x00FFFFFF);
+      if (tile == null) {
+        centerMap.pixels[index] = color(0);
+      } else {
+        int centerX = round(constrain(tile.centerX, 0.0, 1.0) * 255.0);
+        int centerY = round(constrain(tile.centerY, 0.0, 1.0) * 255.0);
+        int radius = round(constrain(tile.radius / radiusScale, 0.0, 1.0) * 255.0);
+        centerMap.pixels[index] = color(centerX, centerY, radius);
+      }
+    }
+  }
+  centerMap.updatePixels();
+  return centerMap;
+}
+
+class TileGeometry {
+  float sumX;
+  float sumY;
+  int pixelCount;
+  float centerX;
+  float centerY;
+  float radius;
+
+  void add(int x, int y) {
+    sumX += x + 0.5;
+    sumY += y + 0.5;
+    pixelCount++;
+  }
+
+  void finish(int imageWidth, int imageHeight, float imageAspect) {
+    centerX = sumX / pixelCount / imageWidth;
+    centerY = sumY / pixelCount / imageHeight;
+  }
+
+  void measureRadius(int x, int y, int imageWidth, int imageHeight, float imageAspect) {
+    float offsetX = ((x + 0.5) / imageWidth - centerX) * imageAspect;
+    float offsetY = (y + 0.5) / imageHeight - centerY;
+    radius = max(radius, sqrt(offsetX * offsetX + offsetY * offsetY));
+  }
 }
 
 void configureColorBandMapping(String mapping) {
@@ -492,6 +599,7 @@ void draw() {
           shader(spotlightRevealShader);
         } else if (useAreaShader) {
           areaRevealShader.set("idMap", areaIdMask);
+          if (areaCenterMap != null) areaRevealShader.set("centerMap", areaCenterMap);
 
           float maskSeedOffset = spotlightIndependentMaskPositions ? (float)i * 123.456 : 0.0;
           float timeInSeconds = (float)millis() / 1000.0;
@@ -500,6 +608,9 @@ void draw() {
           areaRevealShader.set("time", timeInSeconds);
           areaRevealShader.set("cycleDuration", areaCycleDurationSeconds);
           areaRevealShader.set("seedOffset", maskSeedOffset);
+          areaRevealShader.set("areaRevealStyle", areaCenterMap != null ? (float)areaRevealStyle.ordinal() : 0.0);
+          areaRevealShader.set("trailProgress", areaTrailProgress);
+          areaRevealShader.set("imageAspect", imgW / imgH);
           shader(areaRevealShader);
         }
 
@@ -560,6 +671,11 @@ void updateSpotlightReveal(float currentLevel, int currentMs, float elapsedMs, f
   float targetEnergy = constrain(currentLevel * audioSensitivity * energyMult, 0.0, 1.0);
   float energyAmount = targetEnergy >= spotlightEnergy ? attackAmount : releaseAmount;
   spotlightEnergy = lerp(spotlightEnergy, targetEnergy, energyAmount);
+
+  if (currentRevealMode == RevealMode.AREA && areaRevealStyle == AreaRevealStyle.TRAIL) {
+    float areaTrailSpeed = lerp(0.05, 3.0, spotlightEnergy);
+    areaTrailProgress += elapsedMs / 1000.0 * areaTrailSpeed;
+  }
 
   if (currentRevealMode != RevealMode.SPOTLIGHT) return;
 
@@ -768,6 +884,7 @@ class ControlsWindow extends PApplet {
   Button[] sectionButtons;
   Button spotlightIndependentButton;
   Button spotlightKeepInsideButton;
+  Button[] areaStyleButtons;
   Slider editingSlider;
 
   void settings() {
@@ -827,6 +944,11 @@ class ControlsWindow extends PApplet {
     };
     spotlightIndependentButton = new Button("INDEPENDENT MASK POSITIONS");
     spotlightKeepInsideButton = new Button("KEEP CIRCLES INSIDE IMAGE");
+    areaStyleButtons = new Button[] {
+      new Button("WHOLE TILE"),
+      new Button("CENTER GLOW"),
+      new Button("TRAIL")
+    };
   }
 
   void draw() {
@@ -882,6 +1004,12 @@ class ControlsWindow extends PApplet {
       }
       if (spotlightKeepInsideButton.update(mouseX, mouseY, mousePressed)) {
         spotlightKeepCirclesInsideImage = !spotlightKeepCirclesInsideImage;
+      }
+    } else if (activeSection == 3) {
+      for (int i = 0; i < areaStyleButtons.length; i++) {
+        if (areaStyleButtons[i].update(mouseX, mouseY, mousePressed)) {
+          areaRevealStyle = AreaRevealStyle.values()[i];
+        }
       }
     }
   }
@@ -956,6 +1084,9 @@ class ControlsWindow extends PApplet {
       spotlightKeepInsideButton.draw(this, spotlightKeepCirclesInsideImage);
     } else {
       drawRuntimeSliders(areaRevealSliders);
+      for (int i = 0; i < areaStyleButtons.length; i++) {
+        areaStyleButtons[i].draw(this, areaRevealStyle.ordinal() == i);
+      }
     }
   }
 
@@ -979,7 +1110,14 @@ class ControlsWindow extends PApplet {
       spotlightIndependentButton.setBounds(42.0, y, buttonWidth, 52.0);
       spotlightKeepInsideButton.setBounds(54.0 + buttonWidth, y, buttonWidth, 52.0);
     } else {
-      layoutSliders(areaRevealSliders, sectionContentTop);
+      int controlRows = areaRevealSliders.length + 1;
+      layoutSliders(areaRevealSliders, sectionContentTop, controlRows);
+      float y = sectionContentTop + sliderRowSpacing(controlRows) * areaRevealSliders.length + 8.0;
+      float buttonGap = 12.0;
+      float buttonWidth = (width - 84.0 - buttonGap * 2.0) / areaStyleButtons.length;
+      for (int i = 0; i < areaStyleButtons.length; i++) {
+        areaStyleButtons[i].setBounds(42.0 + i * (buttonWidth + buttonGap), y, buttonWidth, 52.0);
+      }
     }
   }
 

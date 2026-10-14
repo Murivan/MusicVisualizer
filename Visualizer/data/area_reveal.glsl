@@ -7,10 +7,14 @@ precision mediump int;
 
 uniform sampler2D texture;
 uniform sampler2D idMap;
+uniform sampler2D centerMap;
 uniform float audioEnergy;
 uniform float time;
 uniform float cycleDuration;
 uniform float seedOffset;
+uniform float areaRevealStyle;
+uniform float trailProgress;
+uniform float imageAspect;
 
 varying vec4 vertColor;
 varying vec4 vertTexCoord;
@@ -18,6 +22,19 @@ varying vec4 vertTexCoord;
 // Pseudo-random hash function
 float hash(vec3 p) {
     return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164))) * 43758.5453);
+}
+
+vec2 trailPoint(float step, float seed) {
+    float angle = hash(vec3(step, seed, 17.0)) * 6.2831853;
+    float distance = sqrt(hash(vec3(step, seed, 91.0))) * 0.55;
+    return vec2(cos(angle), sin(angle)) * distance;
+}
+
+vec2 randomWalkPosition(float progress, float seed) {
+    float step = floor(progress);
+    float blend = fract(progress);
+    blend = blend * blend * (3.0 - 2.0 * blend);
+    return mix(trailPoint(step, seed), trailPoint(step + 1.0, seed), blend);
 }
 
 void main() {
@@ -48,6 +65,34 @@ void main() {
     float visibility = smoothstep(audioEnergy + 0.02, audioEnergy - 0.02, paneValue);
 
     vec4 color = texture2D(texture, vertTexCoord.st) * vertColor;
+    if (areaRevealStyle > 0.5) {
+        vec3 tileGeometry = texture2D(centerMap, vertTexCoord.st).rgb;
+        vec2 center = tileGeometry.rg;
+        float radius = tileGeometry.b * max(1.0, imageAspect);
+        vec2 offset = vertTexCoord.st - center;
+        offset.x *= imageAspect;
+        float normalizedDistance = length(offset) / max(radius, 0.001);
+
+        if (areaRevealStyle < 1.5) {
+            float glowRadius = max(0.02, audioEnergy);
+            float centerGlow = 1.0 - smoothstep(glowRadius - 0.12, glowRadius, normalizedDistance);
+            float glowBrightness = 0.2 + 0.8 * audioEnergy;
+            visibility *= centerGlow * glowBrightness;
+        } else {
+            vec2 localPosition = offset / max(radius, 0.001);
+            float trailBrightness = 0.2 + 0.8 * audioEnergy;
+            float trailDuration = mix(0.05, 2.0, audioEnergy);
+            float trail = 0.0;
+            for (int sampleIndex = 0; sampleIndex < 8; sampleIndex++) {
+                float sampleAmount = float(sampleIndex) / 7.0;
+                vec2 samplePosition = randomWalkPosition(trailProgress - sampleAmount * trailDuration, paneHash);
+                float sampleDistance = length(localPosition - samplePosition);
+                float sampleGlow = 1.0 - smoothstep(0.09, 0.18, sampleDistance);
+                trail = max(trail, sampleGlow * (1.0 - sampleAmount) * trailBrightness);
+            }
+            visibility *= trail;
+        }
+    }
     color.a *= visibility;
 
     gl_FragColor = color;

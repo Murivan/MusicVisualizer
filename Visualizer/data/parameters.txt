@@ -53,3 +53,5 @@ startRevealMode=FULL
 areaEnergyMultiplier=1.0
 # Seconds it takes for the random area selection to do a full migration cycle
 areaCycleDurationSeconds=12.0
+# Active-tile rendering: WHOLE_TILE, CENTER_GLOW, or TRAIL.
+areaRevealStyle=WHOLE_TILE
