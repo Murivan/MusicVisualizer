@@ -2,7 +2,7 @@
 # Edit values after '=' and restart the application to apply them.
 
 # Window and display
-useFullScreen=true
+useFullScreen=false
 canvasWidth=1920
 canvasHeight=1080
 # Zero-based display index preselected in the fullscreen display chooser.

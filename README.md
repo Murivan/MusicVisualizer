@@ -296,6 +296,7 @@ visualization settings only for the running session.
 | Key | Action |
 |---|---|
 | `M` | Cycle between `FULL`, `SPOTLIGHT`, and `AREA`. |
+| `D` | Toggle window decorations (title bar/borders) when `useFullScreen=false`. |
 
 ## Troubleshooting
 

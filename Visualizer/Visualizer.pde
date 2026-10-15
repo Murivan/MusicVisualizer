@@ -230,14 +230,7 @@ void setup() {
   solidMasks = new PImage[colorNames.length];
   bloomMasks = new PImage[colorNames.length];
 
-  if (baseImg != null) {
-    // Calculate scaling to fit the fullscreen window
-    float scaleRatio = min((float)width / baseImg.width, (float)height / baseImg.height);
-    imgW = baseImg.width * scaleRatio;
-    imgH = baseImg.height * scaleRatio;
-    imgX = (width - imgW) / 2;
-    imgY = (height - imgH) / 2;
-  }
+  updateImageLayout();
 
   for (int i = 0; i < colorNames.length; i++) {
     solidIntensities[i] = 0.0; // Default solid intensity
@@ -510,7 +503,74 @@ boolean getBooleanParameter(Properties parameters, String name, boolean defaultV
   return defaultValue;
 }
 
+// Fits the base image into the current window; called every frame so resizing works.
+void updateImageLayout() {
+  if (baseImg == null) return;
+  float scaleRatio = min((float)width / baseImg.width, (float)height / baseImg.height);
+  imgW = baseImg.width * scaleRatio;
+  imgH = baseImg.height * scaleRatio;
+  imgX = (width - imgW) / 2;
+  imgY = (height - imgH) / 2;
+}
+
+int[] savedWindowBounds;
+
+void toggleWindowDecorations() {
+  if (useFullScreen) return;
+  Object nativeWindow = surface.getNative();
+  if (nativeWindow instanceof com.jogamp.newt.opengl.GLWindow) {
+    final com.jogamp.newt.opengl.GLWindow window = (com.jogamp.newt.opengl.GLWindow)nativeWindow;
+    new Thread(new Runnable() {
+      public void run() {
+        if (window.isUndecorated()) {
+          window.setUndecorated(false);
+          if (savedWindowBounds != null) {
+            window.setSize(savedWindowBounds[2], savedWindowBounds[3]);
+            window.setPosition(savedWindowBounds[0], savedWindowBounds[1]);
+          }
+        } else {
+          savedWindowBounds = new int[] { window.getX(), window.getY(), window.getWidth(), window.getHeight() };
+          com.jogamp.newt.MonitorDevice monitor = window.getMainMonitor();
+          for (com.jogamp.newt.MonitorDevice m : window.getScreen().getMonitorDevices()) {
+            println("Monitor " + m.getId() + ": pixels " + m.getViewport() + " | window units " + m.getViewportInWindowUnits());
+          }
+          savedWindowBounds = new int[] { window.getX(), window.getY(), window.getWidth(), window.getHeight() };
+          window.setUndecorated(true);
+          fitWindowToMonitor(window, monitor);
+        }
+      }
+    }).start();
+  }
+}
+
+// Window units and pixels differ on scaled (HiDPI) displays and the ratio is not always what JOGL
+// reports, so resize, measure the real surface in pixels, and correct until it matches the monitor.
+void fitWindowToMonitor(com.jogamp.newt.opengl.GLWindow window, com.jogamp.newt.MonitorDevice monitor) {
+ com.jogamp.nativewindow.util.RectangleImmutable units = monitor.getViewportInWindowUnits();
+ com.jogamp.nativewindow.util.RectangleImmutable pixels = monitor.getViewport();
+ float factor = 1.0;
+ for (int attempt = 0; attempt < 4; attempt++) {
+   window.setSize(round(units.getWidth() * factor), round(units.getHeight() * factor));
+   window.setPosition(round(units.getX() * factor), round(units.getY() * factor));
+   try { Thread.sleep(250); } catch (InterruptedException e) { return; }
+   int actualWidth = window.getSurfaceWidth();
+   println("Fit attempt " + attempt + ": surface " + actualWidth + "x" + window.getSurfaceHeight()
+     + " target " + pixels.getWidth() + "x" + pixels.getHeight() + " factor " + factor);
+   if (abs(actualWidth - pixels.getWidth()) <= 1 || actualWidth <= 0) return;
+   factor *= (float)pixels.getWidth() / actualWidth;
+ }
+}
+
 void draw() {
+  // Changing window properties from the animator thread deadlocks JOGL, so use a helper thread once running.
+  if (!useFullScreen && frameCount == 30) {
+    new Thread(new Runnable() {
+      public void run() {
+        surface.setResizable(true);
+      }
+    }).start();
+  }
+  updateImageLayout();
   if (isCancelled) {
     exit();
     return;
@@ -656,6 +716,7 @@ void keyPressed() {
 }
 
 void handleKeyPressed() {
+  if (key == 'd' || key == 'D') toggleWindowDecorations();
   if (key == 'm' || key == 'M') {
     int nextMode = (currentRevealMode.ordinal() + 1) % RevealMode.values().length;
     currentRevealMode = RevealMode.values()[nextMode];
