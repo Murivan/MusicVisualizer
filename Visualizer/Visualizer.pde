@@ -1101,9 +1101,9 @@ class ControlsWindow extends PApplet {
   void layoutMappingField() {
     float rowSpacing = sliderRowSpacing(audioResponseSliders.length + 2);
     mappingFieldX = 42.0;
-    mappingFieldY = sectionContentTop + rowSpacing * audioResponseSliders.length + 14.0;
-    mappingFieldW = 240.0;
+    mappingFieldW = audioResponseSliders[0].leftColumnWidth();
     mappingFieldH = 52.0;
+    mappingFieldY = sectionContentTop + rowSpacing * audioResponseSliders.length + 40.0;
   }
 
   void updateMappingField() {
@@ -1145,7 +1145,7 @@ class ControlsWindow extends PApplet {
     String shown = editingMapping ? mappingText + ((millis() / 500) % 2 == 0 ? "_" : "") : colorBandMapping;
     text(shown, mappingFieldX + 12.0, mappingFieldY + mappingFieldH * 0.5);
 
-    float noteX = mappingFieldX + mappingFieldW + 24.0;
+    float noteX = audioResponseSliders[0].trackX();
     textSize(18);
     textAlign(LEFT, TOP);
     fill(170);
@@ -1191,7 +1191,7 @@ class ControlsWindow extends PApplet {
     for (int i = 0; i < sectionButtons.length; i++) {
       sectionButtons[i].setBounds(margin + i * (sectionWidth + buttonGap), 106.0, sectionWidth, 54.0);
     }
-    sectionContentTop = sectionButtons[0].y + sectionButtons[0].h + 65.0;
+    sectionContentTop = sectionButtons[0].y + sectionButtons[0].h + 24.0;
   }
 
   void updateButtons() {
@@ -1339,7 +1339,7 @@ class ControlsWindow extends PApplet {
     float touchDiameter = constrain(rowSpacing * 0.62, 22.0, 36.0);
     float sliderWidth = max(160.0, width - margin * 2.0);
     for (int i = 0; i < sliders.length; i++) {
-      sliders[i].setBounds(margin, top + i * rowSpacing, sliderWidth, touchDiameter);
+      sliders[i].setBounds(margin, top + (i + 0.5) * rowSpacing, sliderWidth, touchDiameter);
     }
   }
 
@@ -1406,7 +1406,7 @@ class Slider {
   void update(int mx, int my, boolean mPressed) {
     if (mPressed && !wasPressed) {
       // Just pressed
-      if (mx >= x && mx <= x + w + h && my >= y - h && my <= y + h) {
+      if (mx >= trackX() - h * 0.5 && mx <= x + w + h * 0.5 && my >= y - h && my <= y + h) {
         dragging = true;
       }
     } else if (!mPressed) {
@@ -1414,7 +1414,7 @@ class Slider {
     }
 
     if (dragging) {
-      val = map(mx, x, x + w, minVal, maxVal);
+      val = map(mx, trackX(), trackX() + trackWidth(), minVal, maxVal);
       val = constrain(val, minVal, maxVal);
     }
     wasPressed = mPressed;
@@ -1469,20 +1469,33 @@ class Slider {
     val = constrain(value, minVal, maxVal);
   }
 
+  // Two-column row: label and value box on the left, slider track on the right.
+  float leftColumnWidth() {
+    return constrain(w * 0.26, 300.0, 380.0);
+  }
+
+  float trackX() {
+    return x + leftColumnWidth() + 16.0;
+  }
+
+  float trackWidth() {
+    return max(60.0, x + w - h * 0.5 - trackX());
+  }
+
   float valueFieldWidth() {
-    return constrain(w * 0.18, 110.0, 160.0);
+    return 130.0;
   }
 
   float valueFieldHeight() {
-    return max(28.0, h * 0.8);
+    return max(32.0, h * 1.1);
   }
 
   float valueFieldX() {
-    return x + w - valueFieldWidth();
+    return x + leftColumnWidth() - valueFieldWidth();
   }
 
   float valueFieldY() {
-    return y - h * 0.68 - valueFieldHeight();
+    return y - valueFieldHeight() * 0.5;
   }
 
   boolean isValueFieldHit(int mx, int my) {
@@ -1495,16 +1508,17 @@ class Slider {
     app.fill(100, 200);
     app.noStroke();
     float trackHeight = max(8.0, h * 0.2);
-    app.rect(x, y - trackHeight * 0.5, w, trackHeight);
+    float tx = trackX();
+    app.rect(tx, y - trackHeight * 0.5, trackWidth(), trackHeight);
     app.fill(200, 200);
-    float px = app.map(val, minVal, maxVal, x, x + w);
-    app.rect(x, y - trackHeight * 0.5, px - x, trackHeight);
+    float px = app.map(val, minVal, maxVal, tx, tx + trackWidth());
+    app.rect(tx, y - trackHeight * 0.5, px - tx, trackHeight);
     app.fill(255);
     app.ellipse(px, y, h, h);
     app.fill(255);
-    app.textAlign(LEFT, BOTTOM);
+    app.textAlign(LEFT, CENTER);
     app.textSize(max(18.0, h * 0.52));
-    app.text(label, x, y - h * 0.68);
+    app.text(label, x, y);
     app.fill(editing ? app.color(45, 125, 185) : app.color(55, 55, 62));
     app.rect(valueFieldX(), valueFieldY(), valueFieldWidth(), valueFieldHeight(), 6);
     app.fill(255);
