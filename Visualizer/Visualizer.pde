@@ -562,14 +562,6 @@ void fitWindowToMonitor(com.jogamp.newt.opengl.GLWindow window, com.jogamp.newt.
 }
 
 void draw() {
-  // Changing window properties from the animator thread deadlocks JOGL, so use a helper thread once running.
-  if (!useFullScreen && frameCount == 30) {
-    new Thread(new Runnable() {
-      public void run() {
-        surface.setResizable(true);
-      }
-    }).start();
-  }
   updateImageLayout();
   if (isCancelled) {
     exit();
@@ -954,7 +946,7 @@ class ControlsWindow extends PApplet {
 
   void setup() {
     surface.setTitle("Music Visualizer Controls");
-    surface.setResizable(true);
+    surface.setResizable(false);
     surface.setLocation(40, 40);
     frameRate(fps);
 
