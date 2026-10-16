@@ -259,7 +259,7 @@ visualization settings only for the running session.
 | Setting | Purpose |
 |---|---|
 | `audioBufferSize` | FFT/input buffer size; must be a power of two. |
-| `colorBandMapping` | Active mask order and low-to-high FFT-band mapping. |
+| `colorBandMapping` | Initial mask order and low-to-high FFT-band mapping. Editable at runtime in Controls > Audio Response (type initials, press Enter); all masks are preloaded. |
 | `maxFftFrequency` | Highest frequency included in mask-band analysis. |
 | `frequencyMappingExponent` | Distribution curve for FFT bands; higher values favour lower frequencies. |
 | `audioBandMultiplier` | FFT amplitude scaling for solid masks. |

@@ -231,25 +231,24 @@ void setup() {
   bloomMasks = new PImage[colorNames.length];
 
   updateImageLayout();
-
-  for (int i = 0; i < colorNames.length; i++) {
-    solidIntensities[i] = 0.0; // Default solid intensity
-    bloomIntensities[i] = 0.0;  // Default bloom intensity
-    // Random starting point
-    float randomX = random(0.0, 1.0);
-    float randomY = random(0.0, 1.0);
-    spotlightPositionX[i] = randomX;
-    spotlightPositionY[i] = randomY;
-    spotlightTargetX[i] = randomX;
-    spotlightTargetY[i] = randomY;
-
-  }
+  initializeSpotlightPositions();
 
   controlsWindow = new ControlsWindow();
   PApplet.runSketch(new String[] {"ControlsWindow"}, controlsWindow);
 
   thread("preloadMasks");
   thread("setupAudio");
+}
+
+void initializeSpotlightPositions() {
+  for (int i = 0; i < colorNames.length; i++) {
+    float randomX = random(0.0, 1.0);
+    float randomY = random(0.0, 1.0);
+    spotlightPositionX[i] = randomX;
+    spotlightPositionY[i] = randomY;
+    spotlightTargetX[i] = randomX;
+    spotlightTargetY[i] = randomY;
+  }
 }
 
 void loadParameters() {
@@ -409,12 +408,12 @@ class TileGeometry {
   }
 }
 
-void configureColorBandMapping(String mapping) {
+boolean configureColorBandMapping(String mapping) {
   String normalizedMapping = mapping.replaceAll("\\s", "").toUpperCase();
   String[] configuredColors = getColorNames(normalizedMapping);
   if (configuredColors == null) {
     println("Ignoring invalid colorBandMapping=" + mapping + ". Use unique initials from B, C, R, O, Y, G, M.");
-    return;
+    return false;
   }
 
   colorBandMapping = normalizedMapping;
@@ -426,6 +425,7 @@ void configureColorBandMapping(String mapping) {
   spotlightPositionY = new float[colorNames.length];
   spotlightTargetX = new float[colorNames.length];
   spotlightTargetY = new float[colorNames.length];
+  return true;
 }
 
 String[] getColorNames(String mapping) {
@@ -561,7 +561,45 @@ void fitWindowToMonitor(com.jogamp.newt.opengl.GLWindow window, com.jogamp.newt.
  }
 }
 
+// Both windows draw under this lock so a mapping change never exposes half-resized arrays.
+final Object mappingLock = new Object();
+volatile String pendingColorBandMapping = null;
+PImage[] allSolidMasks = new PImage[7];
+PImage[] allBloomMasks = new PImage[7];
+final String[] allColorNames = { "blue", "cyan", "red", "orange", "yellow", "green", "magenta" };
+
 void draw() {
+  synchronized (mappingLock) {
+    applyPendingColorBandMapping();
+    drawVisualization();
+  }
+}
+
+void applyPendingColorBandMapping() {
+  String requested = pendingColorBandMapping;
+  if (requested == null) return;
+  pendingColorBandMapping = null;
+
+  String[] previousNames = colorNames;
+  if (!configureColorBandMapping(requested)) return;
+  initializeSpotlightPositions();
+  assignActiveMasks();
+  if (controlsWindow != null) controlsWindow.rebuildMaskSliders(previousNames);
+}
+
+void assignActiveMasks() {
+  PImage[] solid = new PImage[colorNames.length];
+  PImage[] bloom = new PImage[colorNames.length];
+  for (int i = 0; i < colorNames.length; i++) {
+    int poolIndex = getColorInitialIndex(colorBandMapping.charAt(i));
+    solid[i] = allSolidMasks[poolIndex];
+    bloom[i] = allBloomMasks[poolIndex];
+  }
+  solidMasks = solid;
+  bloomMasks = bloom;
+}
+
+void drawVisualization() {
   updateImageLayout();
   if (isCancelled) {
     exit();
@@ -863,9 +901,9 @@ void drawBandMapping(PApplet app, float panelTop) {
 void drawStatusOverlay(PApplet app, float panelTop) {
   String maskStatus;
   if (!masksDecoded) {
-    maskStatus = "PRELOADING MASKS: " + masksDecodedCount + "/" + colorNames.length;
+    maskStatus = "PRELOADING MASKS: " +     masksDecodedCount + "/" + allColorNames.length;
   } else if (!allMasksReady) {
-    maskStatus = "UPLOADING MASKS TO GPU: " + warmupIndex + "/" + colorNames.length;
+        maskStatus = "UPLOADING MASKS TO GPU: " + warmupIndex + "/" + allColorNames.length;
   } else {
     maskStatus = "ALL MASKS ACTIVE";
   }
@@ -897,19 +935,22 @@ void drawStatusOverlay(PApplet app, float panelTop) {
 
 void preloadMasks() {
   // Disk access and PNG decoding happen outside the OpenGL animation thread.
-  for (int i = 0; i < colorNames.length; i++) {
-    String colorName = colorNames[i];
-    solidMasks[i] = loadImage("mask_" + colorName + "_solid.png");
-    bloomMasks[i] = loadImage("mask_" + colorName + "_bloom.png");
+  // Every colour is loaded so the mapping can be changed at runtime.
+  for (int i = 0; i < allColorNames.length; i++) {
+    allSolidMasks[i] = loadImage("mask_" + allColorNames[i] + "_solid.png");
+    allBloomMasks[i] = loadImage("mask_" + allColorNames[i] + "_bloom.png");
     masksDecodedCount = i + 1;
   }
 
+  synchronized (mappingLock) {
+    assignActiveMasks();
+  }
   // This volatile write publishes all completed array writes to draw().
   masksDecoded = true;
 }
 
 void warmUpNextMaskPair() {
-  if (warmupIndex >= colorNames.length) {
+  if (warmupIndex >= allColorNames.length) {
     allMasksReady = true;
     animationStartMs = millis();
     return;
@@ -918,12 +959,12 @@ void warmUpNextMaskPair() {
   // Alpha zero keeps this upload invisible while image() initializes each GPU texture.
   blendMode(BLEND);
   tint(255, 0);
-  image(solidMasks[warmupIndex], imgX, imgY, imgW, imgH);
-  image(bloomMasks[warmupIndex], imgX, imgY, imgW, imgH);
+  image(allSolidMasks[warmupIndex], imgX, imgY, imgW, imgH);
+  image(allBloomMasks[warmupIndex], imgX, imgY, imgW, imgH);
   noTint();
 
   warmupIndex++;
-  if (warmupIndex >= colorNames.length) {
+  if (warmupIndex >= allColorNames.length) {
     allMasksReady = true;
     animationStartMs = millis();
   }
@@ -1005,6 +1046,32 @@ class ControlsWindow extends PApplet {
   }
 
   void draw() {
+    synchronized (mappingLock) {
+      drawControls();
+    }
+  }
+
+  void rebuildMaskSliders(String[] previousNames) {
+    Slider[] previousSolid = solidSliders;
+    Slider[] previousBloom = bloomSliders;
+    solidSliders = new Slider[colorNames.length];
+    bloomSliders = new Slider[colorNames.length];
+    for (int i = 0; i < colorNames.length; i++) {
+      float solidValue = 0.0;
+      float bloomValue = 0.0;
+      for (int j = 0; j < previousNames.length; j++) {
+        if (previousNames[j].equals(colorNames[i]) && previousSolid != null && j < previousSolid.length) {
+          solidValue = previousSolid[j].val;
+          bloomValue = previousBloom[j].val;
+        }
+      }
+      solidSliders[i] = new Slider(colorNames[i].toUpperCase() + " SOLID", 0, 0, 0, 0, 0.0, 5.0, solidValue);
+      bloomSliders[i] = new Slider(colorNames[i].toUpperCase() + " BLOOM", 0, 0, 0, 0, 0.0, 5.0, bloomValue);
+    }
+    editingSlider = null;
+  }
+
+  void drawControls() {
     background(24);
 
     if (audioSensSlider == null || baseSlider == null || solidSliders == null || bloomSliders == null) return;
@@ -1014,12 +1081,100 @@ class ControlsWindow extends PApplet {
     drawButtons();
     layoutActiveSection();
     updateActiveSection();
+    updateMappingField();
     audioSensitivity = audioSensSlider.val;
     baseIntensity = constrain(baseSlider.val + currentAudioLevel * audioBaseIntensityScale * audioSensitivity, 0.0, 1.0);
     drawActiveSection();
+    drawMappingField();
 
     drawStatusOverlay(this, diagnosticsTop);
     if (isAudioReady) drawBandMapping(this, diagnosticsTop + 54);
+  }
+
+  // Text box for colorBandMapping, shown at the bottom of the Audio Response section.
+  boolean editingMapping = false;
+  boolean mappingWasPressed = false;
+  String mappingText = "";
+  String mappingMessage = "";
+  float mappingFieldX, mappingFieldY, mappingFieldW, mappingFieldH;
+
+  void layoutMappingField() {
+    float rowSpacing = sliderRowSpacing(audioResponseSliders.length + 2);
+    mappingFieldX = 42.0;
+    mappingFieldY = sectionContentTop + rowSpacing * audioResponseSliders.length + 14.0;
+    mappingFieldW = 240.0;
+    mappingFieldH = 52.0;
+  }
+
+  void updateMappingField() {
+    boolean pressedNow = mousePressed && !mappingWasPressed;
+    mappingWasPressed = mousePressed;
+    if (activeSection != 1) {
+      editingMapping = false;
+      return;
+    }
+    layoutMappingField();
+    if (!pressedNow) return;
+    boolean hit = mouseX >= mappingFieldX && mouseX <= mappingFieldX + mappingFieldW
+      && mouseY >= mappingFieldY && mouseY <= mappingFieldY + mappingFieldH;
+    if (hit && !editingMapping) {
+      editingMapping = true;
+      mappingText = colorBandMapping;
+      mappingMessage = "";
+    } else if (!hit) {
+      editingMapping = false;
+    }
+  }
+
+  void drawMappingField() {
+    if (activeSection != 1) return;
+    pushStyle();
+    textSize(20);
+    textAlign(LEFT, BOTTOM);
+    fill(210);
+    text("COLOR / BAND MAPPING", mappingFieldX, mappingFieldY - 4.0);
+
+    stroke(editingMapping ? color(0, 255, 80) : color(120));
+    strokeWeight(2);
+    fill(editingMapping ? 40 : 32);
+    rect(mappingFieldX, mappingFieldY, mappingFieldW, mappingFieldH, 6);
+    noStroke();
+    fill(255);
+    textSize(28);
+    textAlign(LEFT, CENTER);
+    String shown = editingMapping ? mappingText + ((millis() / 500) % 2 == 0 ? "_" : "") : colorBandMapping;
+    text(shown, mappingFieldX + 12.0, mappingFieldY + mappingFieldH * 0.5);
+
+    float noteX = mappingFieldX + mappingFieldW + 24.0;
+    textSize(18);
+    textAlign(LEFT, TOP);
+    fill(170);
+    text("Color masks and low-to-high FFT-band mapping. Use unique initials: B=blue, C=cyan,\nR=red, O=orange, Y=yellow, G=green, M=magenta. Type a sequence and press Enter.\nThe current setting uses " + colorBandMapping + ".", noteX, mappingFieldY);
+    if (mappingMessage.length() > 0) {
+      fill(255, 120, 90);
+      text(mappingMessage, noteX, mappingFieldY + 66.0);
+    }
+    popStyle();
+  }
+
+  boolean handleMappingKey(char typedKey, int typedKeyCode) {
+    if (typedKeyCode == ESC) {
+      editingMapping = false;
+    } else if (typedKeyCode == ENTER || typedKeyCode == RETURN) {
+      String candidate = mappingText.replaceAll("\\s", "").toUpperCase();
+      if (getColorNames(candidate) == null) {
+        mappingMessage = "Invalid: use unique initials from B C R O Y G M.";
+      } else {
+        pendingColorBandMapping = candidate;
+        mappingMessage = "";
+        editingMapping = false;
+      }
+    } else if (typedKeyCode == BACKSPACE) {
+      if (mappingText.length() > 0) mappingText = mappingText.substring(0, mappingText.length() - 1);
+    } else if (Character.isLetter(typedKey) && mappingText.length() < allColorNames.length) {
+      mappingText += Character.toUpperCase(typedKey);
+    }
+    return true;
   }
 
   void layoutControls() {
@@ -1154,7 +1309,7 @@ class ControlsWindow extends PApplet {
       }
       layoutSliders(visualSliders, sectionContentTop);
     } else if (activeSection == 1) {
-      layoutSliders(audioResponseSliders, sectionContentTop);
+      layoutSliders(audioResponseSliders, sectionContentTop, audioResponseSliders.length + 2);
     } else if (activeSection == 2) {
       int controlRows = spotlightRevealSliders.length + 1;
       layoutSliders(spotlightRevealSliders, sectionContentTop, controlRows);
@@ -1201,13 +1356,21 @@ class ControlsWindow extends PApplet {
   }
 
   void keyPressed() {
-    if (editingSlider != null) {
-      boolean escapePressed = keyCode == ESC;
-      if (editingSlider.handleKey(key, keyCode)) editingSlider = null;
-      if (escapePressed) key = 0;
-      return;
+    synchronized (mappingLock) {
+      if (editingMapping) {
+        boolean escapePressed = keyCode == ESC;
+        handleMappingKey(key, keyCode);
+        if (escapePressed) key = 0;
+        return;
+      }
+      if (editingSlider != null) {
+        boolean escapePressed = keyCode == ESC;
+        if (editingSlider.handleKey(key, keyCode)) editingSlider = null;
+        if (escapePressed) key = 0;
+        return;
+      }
+      handleKeyPressed();
     }
-    handleKeyPressed();
   }
 }
 
