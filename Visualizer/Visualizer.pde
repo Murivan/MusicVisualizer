@@ -62,6 +62,7 @@ ControlsWindow controlsWindow;
 int audioBufferSize = 2048;           // Size of the audio buffer (also dictates FFT resolution)
 float maxFftFrequency = 20000.0;       // The maximum frequency (Hz) analyzed and mapped across the masks
 float frequencyMappingExponent = 3.5; // 1.0 is linear; higher values give lower frequencies more masks
+float bandOverlap = 0.0;              // 0 = no overlap; each band widens by this fraction of its width (max 0.95)
 float audioBandMultiplier = 0.1;      // Base scaling factor for the real-time FFT band amplitudes
 float audioBloomMultiplier = 1.0;     // Indicates how much more the bloom reacts compared to solid masks
 float initialAudioSensitivity = 2.0;  // Initial value for the audio sensitivity slider
@@ -285,6 +286,7 @@ void loadParameters() {
 
   maxFftFrequency = getFloatParameter(parameters, "maxFftFrequency", maxFftFrequency, 1.0, 192000.0);
   frequencyMappingExponent = getFloatParameter(parameters, "frequencyMappingExponent", frequencyMappingExponent, 0.1, 20.0);
+  bandOverlap = getFloatParameter(parameters, "bandOverlap", bandOverlap, 0.0, 0.95);
   audioBandMultiplier = getFloatParameter(parameters, "audioBandMultiplier", audioBandMultiplier, 0.0, 100.0);
   audioBloomMultiplier = getFloatParameter(parameters, "audioBloomMultiplier", audioBloomMultiplier, 0.0, 100.0);
   initialAudioSensitivity = getFloatParameter(parameters, "initialAudioSensitivity", initialAudioSensitivity, 0.0, 20.0);
@@ -851,11 +853,15 @@ int getBandBoundaryBin(int boundaryIndex, int maxBin) {
 }
 
 int getBandStartBin(int maskIndex, int maxBin) {
-  return getBandBoundaryBin(maskIndex, maxBin);
+  int start = getBandBoundaryBin(maskIndex, maxBin);
+  int end = getBandBoundaryBin(maskIndex + 1, maxBin);
+  return max(0, start - round((end - start) * bandOverlap * 0.5));
 }
 
 int getBandEndBin(int maskIndex, int maxBin) {
-  return getBandBoundaryBin(maskIndex + 1, maxBin);
+  int start = getBandBoundaryBin(maskIndex, maxBin);
+  int end = getBandBoundaryBin(maskIndex + 1, maxBin);
+  return min(maxBin, max(end + round((end - start) * bandOverlap * 0.5), getBandStartBin(maskIndex, maxBin) + 1));
 }
 
 String formatFrequency(float frequency) {
@@ -1004,6 +1010,7 @@ class ControlsWindow extends PApplet {
     audioResponseSliders = new RuntimeSlider[] {
       new RuntimeSlider("FFT MAX FREQUENCY", "maxFftFrequency", 1.0, 192000.0),
       new RuntimeSlider("FREQUENCY CURVE", "frequencyMappingExponent", 0.1, 20.0),
+      new RuntimeSlider("BAND OVERLAP", "bandOverlap", 0.0, 0.95),
       new RuntimeSlider("BAND MULTIPLIER", "audioBandMultiplier", 0.0, 100.0),
       new RuntimeSlider("BLOOM MULTIPLIER", "audioBloomMultiplier", 0.0, 100.0),
       new RuntimeSlider("BASE AUDIO BOOST", "audioBaseIntensityScale", 0.0, 100.0),
@@ -1547,6 +1554,7 @@ class RuntimeSlider extends Slider {
   float getParameterValue() {
     if (parameter.equals("maxFftFrequency")) return maxFftFrequency;
     if (parameter.equals("frequencyMappingExponent")) return frequencyMappingExponent;
+    if (parameter.equals("bandOverlap")) return bandOverlap;
     if (parameter.equals("audioBandMultiplier")) return audioBandMultiplier;
     if (parameter.equals("audioBloomMultiplier")) return audioBloomMultiplier;
     if (parameter.equals("audioBaseIntensityScale")) return audioBaseIntensityScale;
@@ -1568,6 +1576,7 @@ class RuntimeSlider extends Slider {
   void setParameterValue(float value) {
     if (parameter.equals("maxFftFrequency")) maxFftFrequency = value;
     else if (parameter.equals("frequencyMappingExponent")) frequencyMappingExponent = value;
+    else if (parameter.equals("bandOverlap")) bandOverlap = value;
     else if (parameter.equals("audioBandMultiplier")) audioBandMultiplier = value;
     else if (parameter.equals("audioBloomMultiplier")) audioBloomMultiplier = value;
     else if (parameter.equals("audioBaseIntensityScale")) audioBaseIntensityScale = value;

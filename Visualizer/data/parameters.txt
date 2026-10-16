@@ -19,6 +19,8 @@ audioBufferSize=2048
 colorBandMapping=BCROY
 maxFftFrequency=16000.0
 frequencyMappingExponent=3.0
+# Fraction (0 to 0.95) by which each band widens into its neighbours; 0 means no overlap.
+bandOverlap=0.0
 audioBandMultiplier=0.1
 audioBloomMultiplier=1.0
 initialAudioSensitivity=2.0

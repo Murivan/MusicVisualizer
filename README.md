@@ -262,6 +262,7 @@ visualization settings only for the running session.
 | `colorBandMapping` | Initial mask order and low-to-high FFT-band mapping. Editable at runtime in Controls > Audio Response (type initials, press Enter); all masks are preloaded. |
 | `maxFftFrequency` | Highest frequency included in mask-band analysis. |
 | `frequencyMappingExponent` | Distribution curve for FFT bands; higher values favour lower frequencies. |
+| `bandOverlap` | 0 to 0.95. Each band widens by this fraction of its width (half on each side, clamped to 0 and the max bin), so neighbours overlap while the full range stays covered. |
 | `audioBandMultiplier` | FFT amplitude scaling for solid masks. |
 | `audioBloomMultiplier` | Additional bloom responsiveness multiplier. |
 | `initialAudioSensitivity` | Starting live audio-sensitivity value. |
