@@ -101,6 +101,12 @@ audio input. Each frame:
 4. Per-band levels are smoothed using attack and release time constants.
 5. Solid and bloom mask layers are composited with additive blending.
 
+Each solid or bloom mask is composited using at most **5 image draws** per frame.
+This limits GPU work when audio multipliers are high. Intensities above 5 are
+clamped for rendering, so increasing `audioBandMultiplier`,
+`audioBloomMultiplier`, or a mask's manual intensity beyond that effective
+level does not add further brightness or draw passes.
+
 ### Colour-band mapping
 
 `colorBandMapping` selects both the active masks and their low-to-high FFT
@@ -263,8 +269,8 @@ visualization settings only for the running session.
 | `maxFftFrequency` | Highest frequency included in mask-band analysis. |
 | `frequencyMappingExponent` | Distribution curve for FFT bands; higher values favour lower frequencies. |
 | `bandOverlap` | 0 to 0.95. Each band widens by this fraction of its width (half on each side, clamped to 0 and the max bin), so neighbours overlap while the full range stays covered. |
-| `audioBandMultiplier` | FFT amplitude scaling for solid masks. |
-| `audioBloomMultiplier` | Additional bloom responsiveness multiplier. |
+| `audioBandMultiplier` | FFT amplitude scaling for solid masks; rendered intensity is capped at 5 passes per mask. |
+| `audioBloomMultiplier` | Additional bloom responsiveness multiplier; rendered intensity is capped at 5 passes per mask. |
 | `initialAudioSensitivity` | Starting live audio-sensitivity value. |
 | `audioBaseIntensityScale` | Audio contribution to base-image brightness. |
 | `baseImageSilenceFloor` | Base-image brightness before audio contribution. |

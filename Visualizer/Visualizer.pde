@@ -65,6 +65,7 @@ float frequencyMappingExponent = 3.5; // 1.0 is linear; higher values give lower
 float bandOverlap = 0.0;              // 0 = no overlap; each band widens by this fraction of its width (max 0.95)
 float audioBandMultiplier = 0.1;      // Base scaling factor for the real-time FFT band amplitudes
 float audioBloomMultiplier = 1.0;     // Indicates how much more the bloom reacts compared to solid masks
+final int MAX_MASK_DRAW_PASSES = 10;
 float initialAudioSensitivity = 2.0;  // Initial value for the audio sensitivity slider
 float audioBaseIntensityScale = 0.5;  // How much the overall audio energy boosts the base image brightness
 float baseImageSilenceFloor = 0.0;    // The base image brightness (baseline) before audio boosts it
@@ -287,13 +288,13 @@ void loadParameters() {
   maxFftFrequency = getFloatParameter(parameters, "maxFftFrequency", maxFftFrequency, 1.0, 192000.0);
   frequencyMappingExponent = getFloatParameter(parameters, "frequencyMappingExponent", frequencyMappingExponent, 0.1, 20.0);
   bandOverlap = getFloatParameter(parameters, "bandOverlap", bandOverlap, 0.0, 0.95);
-  audioBandMultiplier = getFloatParameter(parameters, "audioBandMultiplier", audioBandMultiplier, 0.0, 100.0);
+  audioBandMultiplier = getFloatParameter(parameters, "audioBandMultiplier", audioBandMultiplier, 0.01, 100.0);
   audioBloomMultiplier = getFloatParameter(parameters, "audioBloomMultiplier", audioBloomMultiplier, 0.0, 100.0);
   initialAudioSensitivity = getFloatParameter(parameters, "initialAudioSensitivity", initialAudioSensitivity, 0.0, 20.0);
   audioBaseIntensityScale = getFloatParameter(parameters, "audioBaseIntensityScale", audioBaseIntensityScale, 0.0, 100.0);
   baseImageSilenceFloor = getFloatParameter(parameters, "baseImageSilenceFloor", baseImageSilenceFloor, 0.0, 1.0);
-  audioAttackTimeMs = getFloatParameter(parameters, "audioAttackTimeMs", audioAttackTimeMs, 0.0, 60000.0);
-  audioReleaseTimeMs = getFloatParameter(parameters, "audioReleaseTimeMs", audioReleaseTimeMs, 0.0, 60000.0);
+  audioAttackTimeMs = getFloatParameter(parameters, "audioAttackTimeMs",   audioAttackTimeMs, 0.0, 1000.0);
+    audioReleaseTimeMs = getFloatParameter(parameters, "audioReleaseTimeMs", audioReleaseTimeMs, 0.0, 10000.0);
 
   String startMode = parameters.getProperty("startRevealMode", "FULL").trim().toUpperCase();
   if (startMode.equals("SPOTLIGHT")) currentRevealMode = RevealMode.SPOTLIGHT;
@@ -311,7 +312,7 @@ void loadParameters() {
   spotlightKeepCirclesInsideImage = getBooleanParameter(parameters, "spotlightKeepCirclesInsideImage", spotlightKeepCirclesInsideImage);
 
   areaEnergyMultiplier = getFloatParameter(parameters, "areaEnergyMultiplier", areaEnergyMultiplier, 0.0, 100.0);
-  areaCycleDurationSeconds = getFloatParameter(parameters, "areaCycleDurationSeconds", areaCycleDurationSeconds, 0.1, 86400.0);
+  areaCycleDurationSeconds = getFloatParameter(parameters, "areaCycleDurationSeconds", areaCycleDurationSeconds, 1.0, 100.0);
   areaRevealStyle = getAreaRevealStyle(parameters);
 }
 
@@ -706,19 +707,8 @@ void drawVisualization() {
           shader(areaRevealShader);
         }
 
-        float sInt = solidIntensities[i];
-        while (sInt > 0) {
-          tint(255, min(255, 255 * sInt));
-          image(solidMasks[i], imgX, imgY, imgW, imgH);
-          sInt -= 1.0;
-        }
-
-        float bInt = bloomIntensities[i];
-        while (bInt > 0) {
-          tint(255, min(255, 255 * bInt));
-          image(bloomMasks[i], imgX, imgY, imgW, imgH);
-          bInt -= 1.0;
-        }
+        drawMaskWithCappedIntensity(solidMasks[i], solidIntensities[i]);
+        drawMaskWithCappedIntensity(bloomMasks[i], bloomIntensities[i]);
 
         if (useSpotlightShader) {
           resetShader();
@@ -741,6 +731,18 @@ void drawVisualization() {
 
   startAudioPlaybackIfReady();
 
+}
+
+void drawMaskWithCappedIntensity(PImage mask, float intensity) {
+  float remainingIntensity = min(max(0.0, intensity), (float)MAX_MASK_DRAW_PASSES);
+  int passes = 0;
+  while (remainingIntensity > 0.0 && passes < MAX_MASK_DRAW_PASSES) {
+    float passIntensity = min(1.0, remainingIntensity);
+    tint(255, 255.0 * passIntensity);
+    image(mask, imgX, imgY, imgW, imgH);
+    remainingIntensity -= passIntensity;
+    passes++;
+  }
 }
 
 void keyPressed() {
@@ -1011,12 +1013,12 @@ class ControlsWindow extends PApplet {
       new RuntimeSlider("FFT MAX FREQUENCY", "maxFftFrequency", 1.0, 192000.0),
       new RuntimeSlider("FREQUENCY CURVE", "frequencyMappingExponent", 0.1, 20.0),
       new RuntimeSlider("BAND OVERLAP", "bandOverlap", 0.0, 0.95),
-      new RuntimeSlider("BAND MULTIPLIER", "audioBandMultiplier", 0.0, 100.0),
+      new RuntimeSlider("BAND MULTIPLIER",       "audioBandMultiplier", 0.01, 100.0),
       new RuntimeSlider("BLOOM MULTIPLIER", "audioBloomMultiplier", 0.0, 100.0),
       new RuntimeSlider("BASE AUDIO BOOST", "audioBaseIntensityScale", 0.0, 100.0),
       new RuntimeSlider("SILENCE FLOOR", "baseImageSilenceFloor", 0.0, 1.0),
-      new RuntimeSlider("ATTACK (MS)", "audioAttackTimeMs", 0.0, 60000.0),
-      new RuntimeSlider("RELEASE (MS)", "audioReleaseTimeMs", 0.0, 60000.0)
+      new RuntimeSlider("ATTACK (MS)",       "audioAttackTimeMs", 0.0, 1000.0),
+            new RuntimeSlider("RELEASE (MS)", "audioReleaseTimeMs", 0.0, 10000.0)
     };
     spotlightRevealSliders = new RuntimeSlider[] {
       new RuntimeSlider("ENERGY MULTIPLIER", "spotlightEnergyMultiplier", 0.0, 100.0),
@@ -1029,7 +1031,7 @@ class ControlsWindow extends PApplet {
     };
     areaRevealSliders = new RuntimeSlider[] {
       new RuntimeSlider("ENERGY MULTIPLIER", "areaEnergyMultiplier", 0.0, 100.0),
-      new RuntimeSlider("CYCLE DURATION (SECONDS)", "areaCycleDurationSeconds", 0.1, 86400.0)
+      new RuntimeSlider("CYCLE DURATION (S)",       "areaCycleDurationSeconds", 1.0, 100.0)
     };
 
     modeButtons = new Button[] {

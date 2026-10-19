@@ -23,6 +23,8 @@ frequencyMappingExponent=3.0
 bandOverlap=0.0
 audioBandMultiplier=0.1
 audioBloomMultiplier=1.0
+# Solid and bloom mask intensity are composited with at most 5 image draws per mask.
+# Increasing either multiplier beyond this effective intensity cap will not make masks brighter.
 initialAudioSensitivity=2.0
 audioBaseIntensityScale=0.25
 baseImageSilenceFloor=0.0
