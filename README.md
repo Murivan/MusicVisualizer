@@ -88,7 +88,9 @@ current width and height. It contains:
 - Runtime diagnostics and FFT band labels.
 
 Tap or click a slider's value box to enter a precise numeric value. Type a
-number and press **Enter** to apply it; press **Escape** to cancel.
+number and press **Enter** to apply it; press **Escape** to cancel. Double-click
+(or double-tap) a slider track to reset it to its startup value, which is the
+value loaded from `parameters.txt`.
 
 ## Audio and FFT mapping
 
@@ -269,8 +271,8 @@ visualization settings only for the running session.
 | `maxFftFrequency` | Highest frequency included in mask-band analysis. |
 | `frequencyMappingExponent` | Distribution curve for FFT bands; higher values favour lower frequencies. |
 | `bandOverlap` | 0 to 0.95. Each band widens by this fraction of its width (half on each side, clamped to 0 and the max bin), so neighbours overlap while the full range stays covered. |
-| `audioBandMultiplier` | FFT amplitude scaling for solid masks; rendered intensity is capped at 5 passes per mask. |
-| `audioBloomMultiplier` | Additional bloom responsiveness multiplier; rendered intensity is capped at 5 passes per mask. |
+| `audioBandMultiplier` | FFT amplitude scaling for solid masks; rendered intensity is capped at MAX_MASK_DRAW_PASSES passes per mask. |
+| `audioBloomMultiplier` | Additional bloom responsiveness multiplier; rendered intensity is capped at MAX_MASK_DRAW_PASSES passes per mask. |
 | `initialAudioSensitivity` | Starting live audio-sensitivity value. |
 | `audioBaseIntensityScale` | Audio contribution to base-image brightness. |
 | `baseImageSilenceFloor` | Base-image brightness before audio contribution. |

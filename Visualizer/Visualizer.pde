@@ -66,6 +66,8 @@ float bandOverlap = 0.0;              // 0 = no overlap; each band widens by thi
 float audioBandMultiplier = 0.1;      // Base scaling factor for the real-time FFT band amplitudes
 float audioBloomMultiplier = 1.0;     // Indicates how much more the bloom reacts compared to solid masks
 final int MAX_MASK_DRAW_PASSES = 10;
+final int DOUBLE_CLICK_MS = 400;        // Max interval between presses that counts as a slider double-click
+final float DOUBLE_CLICK_DISTANCE = 30.0;  // Max pointer travel between those presses, in pixels
 float initialAudioSensitivity = 2.0;  // Initial value for the audio sensitivity slider
 float audioBaseIntensityScale = 0.5;  // How much the overall audio energy boosts the base image brightness
 float baseImageSilenceFloor = 0.0;    // The base image brightness (baseline) before audio boosts it
@@ -106,7 +108,7 @@ float areaCycleDurationSeconds = 12.0;          // How fast the random areas evo
 AreaRevealStyle areaRevealStyle = AreaRevealStyle.WHOLE_TILE;
 
 
-String colorBandMapping = "BCROY";
+String colorBandMapping = "BCGROY";
 String[] colorNames = getColorNames(colorBandMapping);
 float[] solidIntensities = new float[colorNames.length];
 float[] bloomIntensities = new float[colorNames.length];
@@ -1068,14 +1070,20 @@ class ControlsWindow extends PApplet {
     for (int i = 0; i < colorNames.length; i++) {
       float solidValue = 0.0;
       float bloomValue = 0.0;
+      float solidDefault = 0.0;
+      float bloomDefault = 0.0;
       for (int j = 0; j < previousNames.length; j++) {
         if (previousNames[j].equals(colorNames[i]) && previousSolid != null && j < previousSolid.length) {
           solidValue = previousSolid[j].val;
           bloomValue = previousBloom[j].val;
+          solidDefault = previousSolid[j].defaultVal;
+          bloomDefault = previousBloom[j].defaultVal;
         }
       }
-      solidSliders[i] = new Slider(colorNames[i].toUpperCase() + " SOLID", 0, 0, 0, 0, 0.0, 5.0, solidValue);
-      bloomSliders[i] = new Slider(colorNames[i].toUpperCase() + " BLOOM", 0, 0, 0, 0, 0.0, 5.0, bloomValue);
+      solidSliders[i] = new Slider(colorNames[i].toUpperCase() + " SOLID", 0, 0, 0, 0, 0.0, 5.0, solidDefault);
+      bloomSliders[i] = new Slider(colorNames[i].toUpperCase() + " BLOOM", 0, 0, 0, 0, 0.0, 5.0, bloomDefault);
+      solidSliders[i].val = solidValue;
+      bloomSliders[i].val = bloomValue;
     }
     editingSlider = null;
   }
@@ -1393,8 +1401,12 @@ class Slider {
   boolean editing = false;
   String editText = "";
   boolean replaceEditText = false;
+  float defaultVal;
+  int lastPressMs = -10000;
+  float lastPressX, lastPressY;
 
   Slider(String label, float x, float y, float w, float h, float minVal, float maxVal, float defaultVal) {
+    this.defaultVal = defaultVal;
     this.label = label;
     this.x = x;
     this.y = y;
@@ -1417,6 +1429,16 @@ class Slider {
       // Just pressed
       if (mx >= trackX() - h * 0.5 && mx <= x + w + h * 0.5 && my >= y - h && my <= y + h) {
         dragging = true;
+        int now = millis();
+        boolean doubleClick = now - lastPressMs <= DOUBLE_CLICK_MS
+          && dist(mx, my, lastPressX, lastPressY) <= DOUBLE_CLICK_DISTANCE;
+        lastPressMs = doubleClick ? -10000 : now;
+        lastPressX = mx;
+        lastPressY = my;
+        if (doubleClick) {
+          dragging = false;
+          resetToDefault();
+        }
       }
     } else if (!mPressed) {
       dragging = false;
@@ -1427,6 +1449,10 @@ class Slider {
       val = constrain(val, minVal, maxVal);
     }
     wasPressed = mPressed;
+  }
+
+  void resetToDefault() {
+    val = constrain(defaultVal, minVal, maxVal);
   }
 
   boolean beginEditing(int mx, int my, boolean mPressed) {
@@ -1544,6 +1570,7 @@ class RuntimeSlider extends Slider {
     super(label, 0, 0, 0, 0, minVal, maxVal, 0.0);
     this.parameter = parameter;
     val = getParameterValue();
+    defaultVal = val;
   }
 
   void updateAndApply(int mx, int my, boolean mPressed) {
