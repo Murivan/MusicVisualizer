@@ -103,8 +103,8 @@ audio input. Each frame:
 4. Per-band levels are smoothed using attack and release time constants.
 5. Solid and bloom mask layers are composited with additive blending.
 
-Each solid or bloom mask is composited using at most **5 image draws** per frame.
-This limits GPU work when audio multipliers are high. Intensities above 5 are
+Each solid or bloom mask is composited using at most **10 image draws** per frame.
+This limits GPU work when audio multipliers are high. Intensities above 10 are
 clamped for rendering, so increasing `audioBandMultiplier`,
 `audioBloomMultiplier`, or a mask's manual intensity beyond that effective
 level does not add further brightness or draw passes.
@@ -252,53 +252,94 @@ All startup settings are in
 to this file require a restart. The controls window changes supported
 visualization settings only for the running session.
 
+The file uses `name=value` entries; lines beginning with `#` are comments.
+Keep each setting on its own line and do not quote values. Boolean values must
+be `true` or `false`. If a setting is omitted, its built-in default is used.
+Numeric values outside the supported range are clamped; values that cannot be
+parsed are ignored and reported in the Processing console. `audioBufferSize`
+has an additional power-of-two requirement.
+
+The ranges below describe the values accepted at startup, not recommended
+targets. The current values in `parameters.txt` are a useful starting point.
+For live experimentation, the controls window exposes most audio, Spotlight,
+and Area parameters; those edits are not written back to the file.
+
 ### Window and controls
 
-| Setting | Purpose |
-|---|---|
-| `useFullScreen` | Use selected-display fullscreen output; otherwise use `canvasWidth` and `canvasHeight`. |
-| `canvasWidth`, `canvasHeight` | Non-fullscreen visualization dimensions. |
-| `visualizationDisplay` | Zero-based display preselected in the display chooser. |
-| `controlsWindowWidth`, `controlsWindowHeight` | Initial control-window dimensions. |
-| `fps` | Target sketch frame rate. |
+| Setting | Accepted values | What it changes |
+|---|---|---|
+| `useFullScreen` | `true` or `false` | `true` opens the visualizer fullscreen and shows the display chooser. `false` creates a window using `canvasWidth` and `canvasHeight`. |
+| `canvasWidth` | 320-16384 pixels | Width of the visualization window when fullscreen is off. |
+| `canvasHeight` | 240-16384 pixels | Height of the visualization window when fullscreen is off. |
+| `visualizationDisplay` | 0-15 | Zero-based default selection in the fullscreen display chooser. It is a default, not a forced selection; the chooser still appears. |
+| `controlsWindowWidth` | 320-4096 pixels | Initial width of the separate controls window. It can be resized after launch. |
+| `controlsWindowHeight` | 240-4096 pixels | Initial height of the separate controls window. |
+| `fps` | 1-240 | Target sketch frame rate. Actual performance can be lower depending on the display, shaders, and machine. |
 
 ### Audio response
 
-| Setting | Purpose |
-|---|---|
-| `audioBufferSize` | FFT/input buffer size; must be a power of two. |
-| `colorBandMapping` | Initial mask order and low-to-high FFT-band mapping. Editable at runtime in Controls > Audio Response (type initials, press Enter); all masks are preloaded. |
-| `maxFftFrequency` | Highest frequency included in mask-band analysis. |
-| `frequencyMappingExponent` | Distribution curve for FFT bands; higher values favour lower frequencies. |
-| `bandOverlap` | 0 to 0.95. Each band widens by this fraction of its width (half on each side, clamped to 0 and the max bin), so neighbours overlap while the full range stays covered. |
-| `audioBandMultiplier` | FFT amplitude scaling for solid masks; rendered intensity is capped at MAX_MASK_DRAW_PASSES passes per mask. |
-| `audioBloomMultiplier` | Additional bloom responsiveness multiplier; rendered intensity is capped at MAX_MASK_DRAW_PASSES passes per mask. |
-| `initialAudioSensitivity` | Starting live audio-sensitivity value. |
-| `audioBaseIntensityScale` | Audio contribution to base-image brightness. |
-| `baseImageSilenceFloor` | Base-image brightness before audio contribution. |
-| `audioAttackTimeMs`, `audioReleaseTimeMs` | Smoothing time constants for responsive visual changes. |
+| Setting | Accepted values | What it changes |
+|---|---|---|
+| `audioBufferSize` | Power of two from 32-65536 | Number of audio samples used by the input buffer and FFT. Larger buffers provide finer frequency spacing but respond less immediately; smaller buffers respond faster but give coarser frequency spacing. |
+| `colorBandMapping` | Unique initials from `B`, `C`, `R`, `O`, `Y`, `G`, `M` | Chooses which colour masks are active and assigns them from the lowest to highest FFT band, left to right. For example, `BCROY` assigns blue to the lowest band and yellow to the highest. A shorter mapping uses fewer masks; all masks are preloaded. Editable in **Controls > Audio Response** by entering initials and pressing Enter. |
+| `maxFftFrequency` | 1-192000 Hz | Upper frequency limit analyzed for the colour bands. Lower it to focus the mapping on bass or midrange. Frequencies available also depend on the selected audio source and its sample rate. |
+| `frequencyMappingExponent` | 0.1-20 | Shapes how the FFT range is divided among the ordered masks. `1` is linear; larger values pack more band boundaries into the low-frequency end, giving lower frequencies more individual colour bands. Smaller values shift more band resolution toward higher frequencies. |
+| `bandOverlap` | 0-0.95 | Controls how much adjacent frequency bands share FFT bins. `0` keeps bands separate. Higher values widen each band by the given fraction of its width, split across its two edges; this can make neighbouring colours respond to more similar sounds. |
+| `audioBandMultiplier` | 0.01-100 | Overall gain applied to each FFT band's response before it is added to that mask's solid intensity. Raise it if the masks barely react; lower it if they hit their brightness limit too easily. |
+| `audioBloomMultiplier` | 0-100 | Scales the audio-driven response of the bloom layer relative to the solid layer. `0` disables audio-driven bloom while leaving manual bloom intensity available. |
+| `initialAudioSensitivity` | 0-20 | Starting value of the live **Audio Sensitivity** control. This also scales overall audio energy used by the base image and reveal modes. It is a startup value; adjust the control window to change sensitivity while running. |
+| `audioBaseIntensityScale` | 0-100 | Scales how much overall audio energy brightens the base image, in addition to the live base-image control. Set to `0` to remove this audio-driven brightness change. Final base-image brightness is limited to 0-1. |
+| `baseImageSilenceFloor` | 0-1 | Starting level of the **Base Image** slider, i.e. base-image brightness before audio contributes. Changing **Silence Floor** in the controls window moves the Base Image slider to that value. Increase it if the base image should remain visible during silence. |
+| `audioAttackTimeMs` | 0-1000 ms | Smoothing time for rising audio levels. Lower values make mask brightness and reveal energy react more quickly; `0` applies rises immediately. |
+| `audioReleaseTimeMs` | 0-10000 ms | Smoothing time for falling audio levels. Higher values make colours and reveal effects linger after a sound; `0` applies falls immediately. |
+
+The live **Audio Sensitivity** control multiplies the FFT response and overall
+audio energy; it is separate from `audioBandMultiplier`. If a visual layer is
+too dim or too bright, adjust sensitivity and the corresponding layer gain
+before changing frequency mapping. Mask solid and bloom intensities are each
+limited to **10 image draws per mask**, so further gain above that rendering
+limit has no visible effect.
 
 ### Spotlight
 
-| Setting | Purpose |
-|---|---|
-| `spotlightEnergyMultiplier` | Audio-energy scaling for Spotlight mode. |
-| `spotlightMinimumRadius`, `spotlightMaximumRadius` | Quiet and loud spotlight radius limits. |
-| `spotlightEdgeFeatherProportion` | Soft-edge fraction of each spotlight. |
-| `spotlightMotionUpdateIntervalMs` | Time between Brownian-motion targets. |
-| `spotlightBrownianStep` | Brownian target displacement scale. |
-| `spotlightMotionSmoothingTimeMs` | Gliding time constant toward a target. |
-| `spotlightIndependentMaskPositions` | Use one Spotlight position per colour mask. |
-| `spotlightKeepCirclesInsideImage` | Keep spotlights inside image bounds. |
+| Setting | Accepted values | What it changes |
+|---|---|---|
+| `spotlightEnergyMultiplier` | 0-100 | Scales audio energy before it is converted to spotlight size. Higher values make the spotlight reach its maximum radius at quieter sound levels. |
+| `spotlightMinimumRadius` | 0.01-2, in image-height units | Spotlight radius at low energy. For example, `0.5` is half the displayed image height. |
+| `spotlightMaximumRadius` | At least `spotlightMinimumRadius`, up to 2 image heights | Maximum radius at high energy. Values larger than the image can cover most or all of it. |
+| `spotlightEdgeFeatherProportion` | 0-1 | Soft-edge width as a proportion of the spotlight radius. `0` gives a sharp edge; larger values make the transition more gradual. |
+| `spotlightMotionUpdateIntervalMs` | 1-60000 ms | Time between new random motion targets. Shorter intervals change direction more often. |
+| `spotlightBrownianStep` | 0.01-1 | Scale of each random target displacement relative to the image size. Larger values make the spotlight move farther between targets. |
+| `spotlightMotionSmoothingTimeMs` | 0-60000 ms | Time used to glide toward each new target. Lower values follow targets faster; `0` moves to each target immediately. |
+| `spotlightIndependentMaskPositions` | `true` or `false` | When `true`, each active colour mask has its own moving spotlight. When `false`, all masks share one position. |
+| `spotlightKeepCirclesInsideImage` | `true` or `false` | When `true`, spotlight positions and radius are constrained so the circular reveal stays inside the image. Turn it off to allow edge clipping. |
 
 ### Area
 
-| Setting | Purpose |
-|---|---|
-| `startRevealMode` | Initial mode: `FULL`, `SPOTLIGHT`, or `AREA`. |
-| `areaEnergyMultiplier` | Audio-energy scaling for Area tile selection. |
-| `areaCycleDurationSeconds` | Tile-selection cycle duration. |
-| `areaRevealStyle` | Active-tile style: `WHOLE_TILE`, `CENTER_GLOW`, or `TRAIL`. |
+| Setting | Accepted values | What it changes |
+|---|---|---|
+| `startRevealMode` | `FULL`, `SPOTLIGHT`, or `AREA` | Reveal mode selected when the sketch starts. Modes can also be switched using the controls window or `M`. |
+| `areaEnergyMultiplier` | 0.01-100 | Scales audio energy used to select tiles. Higher values generally activate more tiles at lower volume; lower values keep the display sparser. |
+| `areaCycleDurationSeconds` | 1-100 seconds | Duration of the tile-selection cycle. Shorter cycles make the pattern migrate faster; longer cycles keep its layout changing more slowly. |
+| `areaRevealStyle` | `WHOLE_TILE`, `CENTER_GLOW`, or `TRAIL` | Visual treatment for selected tiles: show each tile at once, reveal outward from its centre, or draw a moving particle with a fading trail. |
+
+### Tuning examples
+
+- **Make colours react more strongly:** raise `audioBandMultiplier` or the live
+  Audio Sensitivity value. If bloom alone needs emphasis, raise
+  `audioBloomMultiplier`.
+- **Make the response smoother:** increase `audioAttackTimeMs` for slower rises
+  and/or `audioReleaseTimeMs` for longer fades.
+- **Focus the colours on lower frequencies:** lower `maxFftFrequency` and/or
+  raise `frequencyMappingExponent`. The mapping order still determines which
+  colour receives each successive band.
+- **Keep the base image visible in silence:** raise `baseImageSilenceFloor`;
+  use `audioBaseIntensityScale` to change its additional audio-driven boost.
+- **Make Spotlight respond at quieter levels:** raise
+  `spotlightEnergyMultiplier`. Adjust its minimum and maximum radii separately
+  to change the size range.
+- **Change how many Area tiles activate:** adjust `areaEnergyMultiplier`;
+  change how quickly the pattern evolves with `areaCycleDurationSeconds`.
 
 ## Runtime shortcuts
 

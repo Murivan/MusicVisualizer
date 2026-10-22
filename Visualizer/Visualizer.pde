@@ -97,13 +97,13 @@ float spotlightMinimumRadius = 0.04;              // Quiet-sound radius as a fra
 float spotlightMaximumRadius = 0.5;               // Loud-sound radius; 0.5 covers the circular image when centered
 float spotlightEdgeFeatherProportion = 0.25;       // Fraction of each spotlight radius used for its soft edge
 float spotlightMotionUpdateIntervalMs = 1000.0;   // Milliseconds between new Brownian motion targets
-float spotlightBrownianStep = 0.05;               // Brownian target-step scale as a fraction of image size
+float spotlightBrownianStep = 0.03;               // Brownian target-step scale as a fraction of image size
 float spotlightMotionSmoothingTimeMs = 500.0;     // Time constant used to glide toward each new target
 boolean spotlightIndependentMaskPositions = true; // Give each color mask its own moving spotlight
 boolean spotlightKeepCirclesInsideImage = true;   // Recenter and limit spotlights so edges never clip them
 
 // Area Reveal Mode
-float areaEnergyMultiplier = 2.0;               // Scales audio level before converting it to probability threshold
+float areaEnergyMultiplier = 1.0;               // Scales audio level before converting it to probability threshold
 float areaCycleDurationSeconds = 12.0;          // How fast the random areas evolve and cycle (seconds)
 AreaRevealStyle areaRevealStyle = AreaRevealStyle.WHOLE_TILE;
 
@@ -304,16 +304,16 @@ void loadParameters() {
   else currentRevealMode = RevealMode.FULL;
 
   spotlightEnergyMultiplier = getFloatParameter(parameters, "spotlightEnergyMultiplier", spotlightEnergyMultiplier, 0.0, 100.0);
-  spotlightMinimumRadius = getFloatParameter(parameters, "spotlightMinimumRadius", spotlightMinimumRadius, 0.0, 2.0);
+  spotlightMinimumRadius = getFloatParameter(parameters, "spotlightMinimumRadius", spotlightMinimumRadius, 0.01, 2.0);
   spotlightMaximumRadius = getFloatParameter(parameters, "spotlightMaximumRadius", spotlightMaximumRadius, spotlightMinimumRadius, 2.0);
   spotlightEdgeFeatherProportion = getFloatParameter(parameters, "spotlightEdgeFeatherProportion", spotlightEdgeFeatherProportion, 0.0, 1.0);
   spotlightMotionUpdateIntervalMs = getFloatParameter(parameters, "spotlightMotionUpdateIntervalMs", spotlightMotionUpdateIntervalMs, 1.0, 60000.0);
-  spotlightBrownianStep = getFloatParameter(parameters, "spotlightBrownianStep", spotlightBrownianStep, 0.0, 1.0);
+  spotlightBrownianStep = getFloatParameter(parameters, "spotlightBrownianStep", spotlightBrownianStep, 0.01, 1.0);
   spotlightMotionSmoothingTimeMs = getFloatParameter(parameters, "spotlightMotionSmoothingTimeMs", spotlightMotionSmoothingTimeMs, 0.0, 60000.0);
   spotlightIndependentMaskPositions = getBooleanParameter(parameters, "spotlightIndependentMaskPositions", spotlightIndependentMaskPositions);
   spotlightKeepCirclesInsideImage = getBooleanParameter(parameters, "spotlightKeepCirclesInsideImage", spotlightKeepCirclesInsideImage);
 
-  areaEnergyMultiplier = getFloatParameter(parameters, "areaEnergyMultiplier", areaEnergyMultiplier, 0.0, 100.0);
+  areaEnergyMultiplier = getFloatParameter(parameters, "areaEnergyMultiplier", areaEnergyMultiplier, 0.01, 100.0);
   areaCycleDurationSeconds = getFloatParameter(parameters, "areaCycleDurationSeconds", areaCycleDurationSeconds, 1.0, 100.0);
   areaRevealStyle = getAreaRevealStyle(parameters);
 }
@@ -982,6 +982,7 @@ void warmUpNextMaskPair() {
 
 class ControlsWindow extends PApplet {
   float diagnosticsTop;
+  float lastSilenceFloor = baseImageSilenceFloor;
   float sectionContentTop;
   int activeSection = 0;
   Button[] modeButtons;
@@ -1024,15 +1025,15 @@ class ControlsWindow extends PApplet {
     };
     spotlightRevealSliders = new RuntimeSlider[] {
       new RuntimeSlider("ENERGY MULTIPLIER", "spotlightEnergyMultiplier", 0.0, 100.0),
-      new RuntimeSlider("MINIMUM RADIUS", "spotlightMinimumRadius", 0.0, 2.0),
-      new RuntimeSlider("MAXIMUM RADIUS", "spotlightMaximumRadius", 0.0, 2.0),
+      new RuntimeSlider("MINIMUM RADIUS", "spotlightMinimumRadius", 0.01, 1.0),
+      new RuntimeSlider("MAXIMUM RADIUS", "spotlightMaximumRadius", 0.01, 2.0),
       new RuntimeSlider("EDGE FEATHER", "spotlightEdgeFeatherProportion", 0.0, 1.0),
       new RuntimeSlider("MOTION INTERVAL (MS)", "spotlightMotionUpdateIntervalMs", 1.0, 60000.0),
-      new RuntimeSlider("BROWNIAN STEP", "spotlightBrownianStep", 0.0, 1.0),
+      new RuntimeSlider("BROWNIAN STEP", "spotlightBrownianStep", 0.01, 1.0),
       new RuntimeSlider("MOTION SMOOTHING (MS)", "spotlightMotionSmoothingTimeMs", 0.0, 60000.0)
     };
     areaRevealSliders = new RuntimeSlider[] {
-      new RuntimeSlider("ENERGY MULTIPLIER", "areaEnergyMultiplier", 0.0, 100.0),
+      new RuntimeSlider("ENERGY MULTIPLIER", "areaEnergyMultiplier", 0.01, 100.0),
       new RuntimeSlider("CYCLE DURATION (S)",       "areaCycleDurationSeconds", 1.0, 100.0)
     };
 
@@ -1100,6 +1101,11 @@ class ControlsWindow extends PApplet {
     updateActiveSection();
     updateMappingField();
     audioSensitivity = audioSensSlider.val;
+    // The silence floor is the Base Image slider's starting level, so moving it live moves the slider.
+    if (baseImageSilenceFloor != lastSilenceFloor) {
+      baseSlider.val = baseImageSilenceFloor;
+      lastSilenceFloor = baseImageSilenceFloor;
+    }
     baseIntensity = constrain(baseSlider.val + currentAudioLevel * audioBaseIntensityScale * audioSensitivity, 0.0, 1.0);
     drawActiveSection();
     drawMappingField();
