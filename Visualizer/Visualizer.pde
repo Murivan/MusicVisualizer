@@ -114,6 +114,7 @@ float[] solidIntensities = new float[colorNames.length];
 float[] bloomIntensities = new float[colorNames.length];
 float[] releasedBandIntensities = new float[colorNames.length];
 float[] rawBandEnergyLevels = new float[colorNames.length];
+float[] rawBandMeterLevels = new float[colorNames.length];
 float[] bandSensitivities = createDefaultBandSensitivities(colorNames.length);
 float baseIntensity = baseImageSilenceFloor;
 float audioSensitivity = initialAudioSensitivity;
@@ -435,6 +436,7 @@ boolean configureColorBandMapping(String mapping) {
   bloomIntensities = new float[colorNames.length];
   releasedBandIntensities = new float[colorNames.length];
   rawBandEnergyLevels = new float[colorNames.length];
+  rawBandMeterLevels = new float[colorNames.length];
   bandSensitivities = createDefaultBandSensitivities(colorNames.length);
   spotlightPositionX = new float[colorNames.length];
   spotlightPositionY = new float[colorNames.length];
@@ -659,10 +661,21 @@ void drawVisualization() {
         int endBin = getBandEndBin(i, maxBin);
 
         float sum = 0;
+        float sumSquaredMagnitudes = 0;
         for (int b = startBin; b < endBin; b++) {
-          sum += fft.getBand(b);
+          float magnitude = fft.getBand(b);
+          sum += magnitude;
+          sumSquaredMagnitudes += magnitude * magnitude;
         }
         bandEnergy = (sum / (endBin - startBin)) * audioBandMultiplier * audioSensitivity;
+        float fullScaleSineBinMagnitude = max(1.0, actualAudioBufferSize * 0.5);
+        float bandMeterLevel = sqrt(sumSquaredMagnitudes) / fullScaleSineBinMagnitude;
+        float meterSmoothingAmount = bandMeterLevel >= rawBandMeterLevels[i]
+          ? attackAmount
+          : releaseAmount;
+        rawBandMeterLevels[i] = lerp(rawBandMeterLevels[i], bandMeterLevel, meterSmoothingAmount);
+      } else {
+        rawBandMeterLevels[i] = lerp(rawBandMeterLevels[i], 0.0, releaseAmount);
       }
 
       if (bandEnergy >= rawBandEnergyLevels[i]) {
@@ -1432,7 +1445,7 @@ class ControlsWindow extends PApplet {
     fill(210);
     textAlign(LEFT, TOP);
     textSize(18);
-    text("BAND SENSITIVITY  |  LIVE ENERGY", 42.0, sectionContentTop + 2.0);
+    text("BAND SENSITIVITY  |  INPUT (green) / AFTER GAIN (orange)", 42.0, sectionContentTop + 2.0);
     for (BandEqualizerControl control : equalizerControls) control.draw(this);
     popStyle();
   }
@@ -1705,7 +1718,7 @@ class RuntimeSlider extends Slider {
 
 class BandEqualizerControl {
   final float MAX_SENSITIVITY = 5.0;
-  final float ENERGY_METER_MAX = 2.0;
+  final float ENERGY_METER_MIN_DB = -60.0;
   int bandIndex;
   float x, y, w, h;
   boolean dragging;
@@ -1772,36 +1785,55 @@ class BandEqualizerControl {
     float top = trackTop();
     float bottom = trackBottom();
     float center = centerX();
-    float level = max(0.0, rawBandEnergyLevels[bandIndex]);
-    float meterHeight = (bottom - top) * constrain(level / ENERGY_METER_MAX, 0.0, 1.0);
+    float level = max(0.0, rawBandMeterLevels[bandIndex]);
+    // Same total gain that scales the band energy driving the mask intensity.
+    float appliedGain = audioBandMultiplier * audioSensitivity * bandSensitivities[bandIndex];
+    float levelDb = levelToDb(level);
+    float gainedDb = levelToDb(level * appliedGain);
+    float meterHeight = dbToMeterHeight(levelDb, bottom - top);
+    float gainedMeterHeight = dbToMeterHeight(gainedDb, bottom - top);
     float gainY = app.map(bandSensitivities[bandIndex], 0.0, MAX_SENSITIVITY, bottom, top);
 
     app.pushStyle();
     app.noStroke();
     app.fill(58, 62, 70);
-    app.rect(center - 17.0, top, 8.0, bottom - top, 4.0);
+    app.rect(center - 30.0, top, 7.0, bottom - top, 3.5);
+    app.rect(center - 21.0, top, 7.0, bottom - top, 3.5);
     app.fill(40, 190, 140);
-    app.rect(center - 17.0, bottom - meterHeight, 8.0, meterHeight, 4.0);
+    app.rect(center - 30.0, bottom - meterHeight, 7.0, meterHeight, 3.5);
+    app.fill(240, 150, 50);
+    app.rect(center - 21.0, bottom - gainedMeterHeight, 7.0, gainedMeterHeight, 3.5);
 
     app.fill(58, 62, 70);
-    app.rect(center + 7.0, top, 6.0, bottom - top, 3.0);
+    app.rect(center + 5.0, top, 6.0, bottom - top, 3.0);
     app.fill(90, 170, 235);
-    app.rect(center + 7.0, gainY, 6.0, bottom - gainY, 3.0);
+    app.rect(center + 5.0, gainY, 6.0, bottom - gainY, 3.0);
     app.fill(225);
-    app.ellipse(center + 10.0, gainY, 14.0, 14.0);
+    app.ellipse(center + 8.0, gainY, 14.0, 14.0);
 
     app.fill(235);
     app.textAlign(CENTER, CENTER);
     app.textSize(15);
-    app.text(colorNames[bandIndex].toUpperCase(), center, y + h - 30.0);
-    app.fill(175);
-    app.textSize(13);
-    app.text("E " + app.nf(level, 1, 2), center, y + h - 11.0);
+    app.text(colorNames[bandIndex].toUpperCase(), center, y + h - 33.0);
+    app.textSize(11);
+    app.fill(40, 190, 140);
+    app.text(app.nf(levelDb, 1, 0) + " dB", center - 14.0, y + h - 19.0);
+    app.fill(240, 150, 50);
+    app.text(app.nf(gainedDb, 1, 0) + " dB", center - 14.0, y + h - 6.0);
     app.fill(145, 195, 230);
     app.textAlign(LEFT, CENTER);
     app.textSize(12);
     app.text(app.nf(bandSensitivities[bandIndex], 1, 1) + "x", center + 17.0, gainY);
     app.popStyle();
+  }
+
+  float levelToDb(float level) {
+    if (level <= 0.0) return ENERGY_METER_MIN_DB;
+    return max(ENERGY_METER_MIN_DB, 20.0 * log(level) / log(10.0));
+  }
+
+  float dbToMeterHeight(float db, float trackHeight) {
+    return trackHeight * constrain((db - ENERGY_METER_MIN_DB) / -ENERGY_METER_MIN_DB, 0.0, 1.0);
   }
 }
 

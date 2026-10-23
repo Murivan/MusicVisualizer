@@ -87,6 +87,13 @@ current width and height. It contains:
   each active mask, plus the **Audio Sensitivity** slider, FFT mapping, gain
   and smoothing controls, and the colour/band mapping text box. EQ faders start
   at 1.0×, range from 0× to 5×, and double-clicking one resets it to 1.0×.
+  The energy meter shows pre-EQ band magnitude relative to a full-scale,
+  bin-centred sine-wave FFT bin; it has a -60 dB display floor and is
+  independent of Audio Sensitivity and the band multiplier. It is not an
+  acoustic SPL reading, and multi-bin band levels can exceed 0 dB. A second
+  orange meter beside it (same dB scale) shows the same level after the total
+  gain: `audioBandMultiplier` × Audio Sensitivity × the band's EQ fader. That
+  gain is applied to the band energy that drives the mask intensity.
 - **Spotlight:** radius, feather and motion sliders, plus toggle buttons.
 - **Area:** energy and cycle sliders, plus the tile-style buttons.
 - Runtime diagnostics and FFT band labels.
@@ -110,8 +117,11 @@ audio input. Each frame:
 2. Overall audio level drives base-image brightness and reveal-mode energy.
 3. FFT bins are divided among configured colour masks.
 4. Each band's energy is smoothed using attack and release time constants; the
-   Audio Response EQ shows this pre-EQ energy and applies an independent 0×–5×
-   sensitivity to the corresponding mask.
+   Audio Response EQ shows pre-EQ band magnitude on a relative logarithmic
+   scale. It combines the band's FFT magnitudes as a root-sum-square, normalized
+   to the magnitude of a full-scale, bin-centred sine-wave FFT bin, with a
+   -60 dB display floor. It applies an independent 0×–5× sensitivity to the
+   corresponding mask.
 5. Solid and bloom mask layers are composited with additive blending.
 
 Each solid or bloom mask is composited using at most **10 image draws** per frame.
