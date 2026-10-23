@@ -113,6 +113,8 @@ String[] colorNames = getColorNames(colorBandMapping);
 float[] solidIntensities = new float[colorNames.length];
 float[] bloomIntensities = new float[colorNames.length];
 float[] releasedBandIntensities = new float[colorNames.length];
+float[] rawBandEnergyLevels = new float[colorNames.length];
+float[] bandSensitivities = createDefaultBandSensitivities(colorNames.length);
 float baseIntensity = baseImageSilenceFloor;
 float audioSensitivity = initialAudioSensitivity;
 volatile float currentAudioLevel = 0.0;
@@ -413,6 +415,12 @@ class TileGeometry {
   }
 }
 
+float[] createDefaultBandSensitivities(int count) {
+  float[] sensitivities = new float[count];
+  for (int i = 0; i < count; i++) sensitivities[i] = 1.0;
+  return sensitivities;
+}
+
 boolean configureColorBandMapping(String mapping) {
   String normalizedMapping = mapping.replaceAll("\\s", "").toUpperCase();
   String[] configuredColors = getColorNames(normalizedMapping);
@@ -426,6 +434,8 @@ boolean configureColorBandMapping(String mapping) {
   solidIntensities = new float[colorNames.length];
   bloomIntensities = new float[colorNames.length];
   releasedBandIntensities = new float[colorNames.length];
+  rawBandEnergyLevels = new float[colorNames.length];
+  bandSensitivities = createDefaultBandSensitivities(colorNames.length);
   spotlightPositionX = new float[colorNames.length];
   spotlightPositionY = new float[colorNames.length];
   spotlightTargetX = new float[colorNames.length];
@@ -586,7 +596,16 @@ void applyPendingColorBandMapping() {
   pendingColorBandMapping = null;
 
   String[] previousNames = colorNames;
+  float[] previousBandSensitivities = bandSensitivities;
   if (!configureColorBandMapping(requested)) return;
+  for (int i = 0; i < colorNames.length; i++) {
+    for (int j = 0; j < previousNames.length; j++) {
+      if (colorNames[i].equals(previousNames[j]) && j < previousBandSensitivities.length) {
+        bandSensitivities[i] = previousBandSensitivities[j];
+        break;
+      }
+    }
+  }
   initializeSpotlightPositions();
   assignActiveMasks();
   if (controlsWindow != null) controlsWindow.rebuildMaskSliders(previousNames);
@@ -633,7 +652,7 @@ void drawVisualization() {
 
   if (solidSliders != null && bloomSliders != null) {
     for (int i = 0; i < colorNames.length; i++) {
-      float bandVal = 0.0;
+      float bandEnergy = 0.0;
       if (isAudioReady && fft != null) {
         int maxBin = getMaxAnalysisBin();
         int startBin = getBandStartBin(i, maxBin);
@@ -643,14 +662,15 @@ void drawVisualization() {
         for (int b = startBin; b < endBin; b++) {
           sum += fft.getBand(b);
         }
-        bandVal = (sum / (endBin - startBin)) * audioBandMultiplier * audioSensitivity;
+        bandEnergy = (sum / (endBin - startBin)) * audioBandMultiplier * audioSensitivity;
       }
 
-      if (bandVal >= releasedBandIntensities[i]) {
-        releasedBandIntensities[i] = lerp(releasedBandIntensities[i], bandVal, attackAmount);
+      if (bandEnergy >= rawBandEnergyLevels[i]) {
+        rawBandEnergyLevels[i] = lerp(rawBandEnergyLevels[i], bandEnergy, attackAmount);
       } else {
-        releasedBandIntensities[i] = lerp(releasedBandIntensities[i], bandVal, releaseAmount);
+        rawBandEnergyLevels[i] = lerp(rawBandEnergyLevels[i], bandEnergy, releaseAmount);
       }
+      releasedBandIntensities[i] = rawBandEnergyLevels[i] * bandSensitivities[i];
 
       solidIntensities[i] = solidSliders[i].val + releasedBandIntensities[i];
       bloomIntensities[i] = bloomSliders[i].val + releasedBandIntensities[i] * audioBloomMultiplier;
@@ -990,6 +1010,7 @@ class ControlsWindow extends PApplet {
   Button spotlightIndependentButton;
   Button spotlightKeepInsideButton;
   Button[] areaStyleButtons;
+  BandEqualizerControl[] equalizerControls;
   Slider editingSlider;
 
   void settings() {
@@ -1011,6 +1032,7 @@ class ControlsWindow extends PApplet {
       solidSliders[i] = new Slider(colorNames[i].toUpperCase() + " SOLID", 0, 0, 0, 0, 0.0, 5.0, solidIntensities[i]);
       bloomSliders[i] = new Slider(colorNames[i].toUpperCase() + " BLOOM", 0, 0, 0, 0, 0.0, 5.0, bloomIntensities[i]);
     }
+    rebuildEqualizerControls();
 
     audioResponseSliders = new RuntimeSlider[] {
       new RuntimeSlider("FFT MAX FREQUENCY", "maxFftFrequency", 1.0, 192000.0),
@@ -1086,7 +1108,15 @@ class ControlsWindow extends PApplet {
       solidSliders[i].val = solidValue;
       bloomSliders[i].val = bloomValue;
     }
+    rebuildEqualizerControls();
     editingSlider = null;
+  }
+
+  void rebuildEqualizerControls() {
+    equalizerControls = new BandEqualizerControl[colorNames.length];
+    for (int i = 0; i < colorNames.length; i++) {
+      equalizerControls[i] = new BandEqualizerControl(i);
+    }
   }
 
   void drawControls() {
@@ -1122,12 +1152,10 @@ class ControlsWindow extends PApplet {
   float mappingFieldX, mappingFieldY, mappingFieldW, mappingFieldH;
 
   void layoutMappingField() {
-    int sliderRows = audioResponseSliders.length + 1;
-    float rowSpacing = sliderRowSpacing(sliderRows + 2);
     mappingFieldX = 42.0;
     mappingFieldW = audioResponseSliders[0].leftColumnWidth();
-    mappingFieldH = 52.0;
-    mappingFieldY = sectionContentTop + rowSpacing * sliderRows + 40.0;
+    mappingFieldH = 46.0;
+    mappingFieldY = diagnosticsTop - 58.0;
   }
 
   void updateMappingField() {
@@ -1170,13 +1198,13 @@ class ControlsWindow extends PApplet {
     text(shown, mappingFieldX + 12.0, mappingFieldY + mappingFieldH * 0.5);
 
     float noteX = audioResponseSliders[0].trackX();
-    textSize(18);
+    textSize(15);
     textAlign(LEFT, TOP);
     fill(170);
-    text("Color masks and low-to-high FFT-band mapping. Use unique initials: B=blue, C=cyan,\nR=red, O=orange, Y=yellow, G=green, M=magenta. Type a sequence and press Enter.\nThe current setting uses " + colorBandMapping + ".", noteX, mappingFieldY);
+    text("Low-to-high FFT bands; enter unique initials B C R O Y G M.\nCurrent mapping: " + colorBandMapping + ". Press Enter to apply.", noteX, mappingFieldY + 2.0);
     if (mappingMessage.length() > 0) {
       fill(255, 120, 90);
-      text(mappingMessage, noteX, mappingFieldY + 66.0);
+      text(mappingMessage, noteX, mappingFieldY + 34.0);
     }
     popStyle();
   }
@@ -1256,6 +1284,7 @@ class ControlsWindow extends PApplet {
   }
 
   void updateActiveSection() {
+    updateEqualizerControls(activeSection == 1 && editingSlider == null);
     if (editingSlider == null) {
       Slider[] activeSliders = getActiveSliders();
       for (Slider slider : activeSliders) {
@@ -1314,6 +1343,7 @@ class ControlsWindow extends PApplet {
         bloomSliders[i].draw(this);
       }
     } else if (activeSection == 1) {
+      drawBandEqualizer();
       audioSensSlider.draw(this);
       drawRuntimeSliders(audioResponseSliders);
     } else if (activeSection == 2) {
@@ -1333,8 +1363,7 @@ class ControlsWindow extends PApplet {
       Slider[] visualSliders = getActiveSliders();
       layoutSliders(visualSliders, sectionContentTop);
     } else if (activeSection == 1) {
-      Slider[] audioSliders = getAudioResponseSliders();
-      layoutSliders(audioSliders, sectionContentTop, audioSliders.length + 2);
+      layoutAudioResponseSection();
     } else if (activeSection == 2) {
       int controlRows = spotlightRevealSliders.length + 1;
       layoutSliders(spotlightRevealSliders, sectionContentTop, controlRows);
@@ -1354,6 +1383,25 @@ class ControlsWindow extends PApplet {
     }
   }
 
+  void layoutAudioResponseSection() {
+    layoutMappingField();
+    float margin = 42.0;
+    float equalizerTop = sectionContentTop + 28.0;
+    float equalizerHeight = 126.0;
+    float columnWidth = (width - margin * 2.0) / max(1, equalizerControls.length);
+    for (int i = 0; i < equalizerControls.length; i++) {
+      equalizerControls[i].setBounds(margin + i * columnWidth, equalizerTop, columnWidth, equalizerHeight);
+    }
+
+    Slider[] audioSliders = getAudioResponseSliders();
+    float controlsTop = sectionContentTop + 166.0;
+    float rowSpacing = (mappingFieldY - 10.0 - controlsTop) / audioSliders.length;
+    float sliderHeight = constrain(rowSpacing * 0.58, 22.0, 28.0);
+    for (int i = 0; i < audioSliders.length; i++) {
+      audioSliders[i].setBounds(margin, controlsTop + (i + 0.5) * rowSpacing, width - margin * 2.0, sliderHeight);
+    }
+  }
+
   void layoutSliders(Slider[] sliders, float top) {
     layoutSliders(sliders, top, sliders.length);
   }
@@ -1370,6 +1418,23 @@ class ControlsWindow extends PApplet {
 
   float sliderRowSpacing(int controlCount) {
     return (diagnosticsTop - sectionContentTop) / max(1, controlCount);
+  }
+
+  void updateEqualizerControls(boolean active) {
+    if (equalizerControls == null) return;
+    for (BandEqualizerControl control : equalizerControls) {
+      control.update(mouseX, mouseY, active && mousePressed);
+    }
+  }
+
+  void drawBandEqualizer() {
+    pushStyle();
+    fill(210);
+    textAlign(LEFT, TOP);
+    textSize(18);
+    text("BAND SENSITIVITY  |  LIVE ENERGY", 42.0, sectionContentTop + 2.0);
+    for (BandEqualizerControl control : equalizerControls) control.draw(this);
+    popStyle();
   }
 
   void updateRuntimeSliders(RuntimeSlider[] sliders) {
@@ -1635,6 +1700,108 @@ class RuntimeSlider extends Slider {
     val = constrain(value, minVal, maxVal);
     setParameterValue(val);
     val = getParameterValue();
+  }
+}
+
+class BandEqualizerControl {
+  final float MAX_SENSITIVITY = 5.0;
+  final float ENERGY_METER_MAX = 2.0;
+  int bandIndex;
+  float x, y, w, h;
+  boolean dragging;
+  boolean wasPressed;
+  int lastPressMs = -10000;
+  float lastPressX, lastPressY;
+
+  BandEqualizerControl(int bandIndex) {
+    this.bandIndex = bandIndex;
+  }
+
+  void setBounds(float x, float y, float w, float h) {
+    this.x = x;
+    this.y = y;
+    this.w = w;
+    this.h = h;
+  }
+
+  float centerX() {
+    return x + w * 0.5;
+  }
+
+  float trackTop() {
+    return y + 12.0;
+  }
+
+  float trackBottom() {
+    return y + h - 42.0;
+  }
+
+  void update(int mx, int my, boolean mPressed) {
+    if (mPressed && !wasPressed) {
+      float hitHalfWidth = min(26.0, w * 0.45);
+      boolean hit = mx >= centerX() - hitHalfWidth && mx <= centerX() + hitHalfWidth
+        && my >= trackTop() - 12.0 && my <= trackBottom() + 12.0;
+      if (hit) {
+        dragging = true;
+        int now = millis();
+        boolean doubleClick = now - lastPressMs <= DOUBLE_CLICK_MS
+          && dist(mx, my, lastPressX, lastPressY) <= DOUBLE_CLICK_DISTANCE;
+        lastPressMs = doubleClick ? -10000 : now;
+        lastPressX = mx;
+        lastPressY = my;
+        if (doubleClick) {
+          dragging = false;
+          bandSensitivities[bandIndex] = 1.0;
+        }
+      }
+    } else if (!mPressed) {
+      dragging = false;
+    }
+
+    if (dragging) {
+      bandSensitivities[bandIndex] = constrain(
+        map(my, trackBottom(), trackTop(), 0.0, MAX_SENSITIVITY),
+        0.0,
+        MAX_SENSITIVITY
+      );
+    }
+    wasPressed = mPressed;
+  }
+
+  void draw(PApplet app) {
+    float top = trackTop();
+    float bottom = trackBottom();
+    float center = centerX();
+    float level = max(0.0, rawBandEnergyLevels[bandIndex]);
+    float meterHeight = (bottom - top) * constrain(level / ENERGY_METER_MAX, 0.0, 1.0);
+    float gainY = app.map(bandSensitivities[bandIndex], 0.0, MAX_SENSITIVITY, bottom, top);
+
+    app.pushStyle();
+    app.noStroke();
+    app.fill(58, 62, 70);
+    app.rect(center - 17.0, top, 8.0, bottom - top, 4.0);
+    app.fill(40, 190, 140);
+    app.rect(center - 17.0, bottom - meterHeight, 8.0, meterHeight, 4.0);
+
+    app.fill(58, 62, 70);
+    app.rect(center + 7.0, top, 6.0, bottom - top, 3.0);
+    app.fill(90, 170, 235);
+    app.rect(center + 7.0, gainY, 6.0, bottom - gainY, 3.0);
+    app.fill(225);
+    app.ellipse(center + 10.0, gainY, 14.0, 14.0);
+
+    app.fill(235);
+    app.textAlign(CENTER, CENTER);
+    app.textSize(15);
+    app.text(colorNames[bandIndex].toUpperCase(), center, y + h - 30.0);
+    app.fill(175);
+    app.textSize(13);
+    app.text("E " + app.nf(level, 1, 2), center, y + h - 11.0);
+    app.fill(145, 195, 230);
+    app.textAlign(LEFT, CENTER);
+    app.textSize(12);
+    app.text(app.nf(bandSensitivities[bandIndex], 1, 1) + "x", center + 17.0, gainY);
+    app.popStyle();
   }
 }
 

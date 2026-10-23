@@ -83,8 +83,10 @@ current width and height. It contains:
 - `FULL`, `SPOTLIGHT`, and `AREA` reveal-mode buttons.
 - **Mask Intensity:** the **Base Image** slider and a solid and a bloom slider
   for each active colour mask.
-- **Audio Response:** the **Audio Sensitivity** slider, the FFT mapping, gain
-  and smoothing sliders, and the colour/band mapping text box.
+- **Audio Response:** a vertical sensitivity fader and live energy meter for
+  each active mask, plus the **Audio Sensitivity** slider, FFT mapping, gain
+  and smoothing controls, and the colour/band mapping text box. EQ faders start
+  at 1.0×, range from 0× to 5×, and double-clicking one resets it to 1.0×.
 - **Spotlight:** radius, feather and motion sliders, plus toggle buttons.
 - **Area:** energy and cycle sliders, plus the tile-style buttons.
 - Runtime diagnostics and FFT band labels.
@@ -93,10 +95,11 @@ See [Where each setting lives](#where-each-setting-lives) for which settings
 come from `parameters.txt`, which can be changed live, and which exist in only
 one of the two places.
 
-Tap or click a slider's value box to enter a precise numeric value. Type a
-number and press **Enter** to apply it; press **Escape** to cancel. Double-click
-(or double-tap) a slider track to reset it to its startup value, which is the
-value loaded from `parameters.txt`.
+Tap or click a horizontal slider's value box to enter a precise numeric value.
+Type a number and press **Enter** to apply it; press **Escape** to cancel.
+Double-click (or double-tap) a horizontal slider track to reset it to its
+startup value. Double-click an EQ fader to reset that band's sensitivity to
+1.0×.
 
 ## Audio and FFT mapping
 
@@ -106,7 +109,9 @@ audio input. Each frame:
 1. The source buffer is sent to the FFT.
 2. Overall audio level drives base-image brightness and reveal-mode energy.
 3. FFT bins are divided among configured colour masks.
-4. Per-band levels are smoothed using attack and release time constants.
+4. Each band's energy is smoothed using attack and release time constants; the
+   Audio Response EQ shows this pre-EQ energy and applies an independent 0×–5×
+   sensitivity to the corresponding mask.
 5. Solid and bloom mask layers are composited with additive blending.
 
 Each solid or bloom mask is composited using at most **10 image draws** per frame.
@@ -266,7 +271,7 @@ written back to the file.
 | **File only** (need a restart) | `useFullScreen`, `canvasWidth`, `canvasHeight`, `visualizationDisplay`, `controlsWindowWidth`, `controlsWindowHeight`, `fps`, `audioBufferSize` | Yes | No |
 | **File sets the startup value, controls change it live** | **Audio Response** sliders: `initialAudioSensitivity` (**Audio Sensitivity**), `maxFftFrequency`, `frequencyMappingExponent`, `bandOverlap`, `audioBandMultiplier`, `audioBloomMultiplier`, `audioBaseIntensityScale`, `baseImageSilenceFloor` (**Silence Floor**), `audioAttackTimeMs`, `audioReleaseTimeMs`. **Spotlight** sliders: `spotlightEnergyMultiplier`, `spotlightMinimumRadius`, `spotlightMaximumRadius`, `spotlightEdgeFeatherProportion`, `spotlightMotionUpdateIntervalMs`, `spotlightBrownianStep`, `spotlightMotionSmoothingTimeMs`. **Area** sliders: `areaEnergyMultiplier`, `areaCycleDurationSeconds` | Yes | Yes, one slider each |
 | **File sets the startup value, controls change it live** (non-slider) | `colorBandMapping` (text box in **Audio Response**), `startRevealMode` (mode buttons or `M`), `spotlightIndependentMaskPositions` and `spotlightKeepCirclesInsideImage` (**Spotlight** buttons), `areaRevealStyle` (**Area** buttons) | Yes | Yes |
-| **Controls window only** | **Base Image** slider and the per-colour **Solid** and **Bloom** sliders in **Mask Intensity** | No; the Base Image slider starts at `baseImageSilenceFloor` and the colour sliders start at 0 | Yes |
+| **Controls window only** | **Base Image** slider and the per-colour **Solid** and **Bloom** sliders in **Mask Intensity**; per-mask **Audio Response** EQ sensitivities | No; the Base Image slider starts at `baseImageSilenceFloor`, colour sliders start at 0, and EQ sensitivities start at 1.0× | Yes |
 
 A slider's startup value is also what a double-click on it resets to.
 
