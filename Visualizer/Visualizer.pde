@@ -1122,11 +1122,12 @@ class ControlsWindow extends PApplet {
   float mappingFieldX, mappingFieldY, mappingFieldW, mappingFieldH;
 
   void layoutMappingField() {
-    float rowSpacing = sliderRowSpacing(audioResponseSliders.length + 2);
+    int sliderRows = audioResponseSliders.length + 1;
+    float rowSpacing = sliderRowSpacing(sliderRows + 2);
     mappingFieldX = 42.0;
     mappingFieldW = audioResponseSliders[0].leftColumnWidth();
     mappingFieldH = 52.0;
-    mappingFieldY = sectionContentTop + rowSpacing * audioResponseSliders.length + 40.0;
+    mappingFieldY = sectionContentTop + rowSpacing * sliderRows + 40.0;
   }
 
   void updateMappingField() {
@@ -1268,13 +1269,13 @@ class ControlsWindow extends PApplet {
     }
 
     if (activeSection == 0) {
-      audioSensSlider.update(mouseX, mouseY, mousePressed);
       baseSlider.update(mouseX, mouseY, mousePressed);
       for (int i = 0; i < colorNames.length; i++) {
         solidSliders[i].update(mouseX, mouseY, mousePressed);
         bloomSliders[i].update(mouseX, mouseY, mousePressed);
       }
     } else if (activeSection == 1) {
+      audioSensSlider.update(mouseX, mouseY, mousePressed);
       updateRuntimeSliders(audioResponseSliders);
     } else if (activeSection == 2) {
       updateRuntimeSliders(spotlightRevealSliders);
@@ -1283,31 +1284,37 @@ class ControlsWindow extends PApplet {
     }
   }
 
+  Slider[] getAudioResponseSliders() {
+    Slider[] sliders = new Slider[audioResponseSliders.length + 1];
+    sliders[0] = audioSensSlider;
+    for (int i = 0; i < audioResponseSliders.length; i++) sliders[i + 1] = audioResponseSliders[i];
+    return sliders;
+  }
+
   Slider[] getActiveSliders() {
     if (activeSection == 0) {
-      Slider[] visualSliders = new Slider[2 + colorNames.length * 2];
-      visualSliders[0] = audioSensSlider;
-      visualSliders[1] = baseSlider;
+      Slider[] visualSliders = new Slider[1 + colorNames.length * 2];
+      visualSliders[0] = baseSlider;
       for (int i = 0; i < colorNames.length; i++) {
-        visualSliders[i * 2 + 2] = solidSliders[i];
-        visualSliders[i * 2 + 3] = bloomSliders[i];
+        visualSliders[i * 2 + 1] = solidSliders[i];
+        visualSliders[i * 2 + 2] = bloomSliders[i];
       }
       return visualSliders;
     }
-    if (activeSection == 1) return audioResponseSliders;
+    if (activeSection == 1) return getAudioResponseSliders();
     if (activeSection == 2) return spotlightRevealSliders;
     return areaRevealSliders;
   }
 
   void drawActiveSection() {
     if (activeSection == 0) {
-      audioSensSlider.draw(this);
       baseSlider.draw(this);
       for (int i = 0; i < colorNames.length; i++) {
         solidSliders[i].draw(this);
         bloomSliders[i].draw(this);
       }
     } else if (activeSection == 1) {
+      audioSensSlider.draw(this);
       drawRuntimeSliders(audioResponseSliders);
     } else if (activeSection == 2) {
       drawRuntimeSliders(spotlightRevealSliders);
@@ -1323,16 +1330,11 @@ class ControlsWindow extends PApplet {
 
   void layoutActiveSection() {
     if (activeSection == 0) {
-      Slider[] visualSliders = new Slider[2 + colorNames.length * 2];
-      visualSliders[0] = audioSensSlider;
-      visualSliders[1] = baseSlider;
-      for (int i = 0; i < colorNames.length; i++) {
-        visualSliders[i * 2 + 2] = solidSliders[i];
-        visualSliders[i * 2 + 3] = bloomSliders[i];
-      }
+      Slider[] visualSliders = getActiveSliders();
       layoutSliders(visualSliders, sectionContentTop);
     } else if (activeSection == 1) {
-      layoutSliders(audioResponseSliders, sectionContentTop, audioResponseSliders.length + 2);
+      Slider[] audioSliders = getAudioResponseSliders();
+      layoutSliders(audioSliders, sectionContentTop, audioSliders.length + 2);
     } else if (activeSection == 2) {
       int controlRows = spotlightRevealSliders.length + 1;
       layoutSliders(spotlightRevealSliders, sectionContentTop, controlRows);

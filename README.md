@@ -81,11 +81,17 @@ The controls window can be resized. Its layout is recalculated from the
 current width and height. It contains:
 
 - `FULL`, `SPOTLIGHT`, and `AREA` reveal-mode buttons.
-- Mask intensity controls.
-- Audio response controls.
-- Spotlight controls.
-- Area controls.
+- **Mask Intensity:** the **Base Image** slider and a solid and a bloom slider
+  for each active colour mask.
+- **Audio Response:** the **Audio Sensitivity** slider, the FFT mapping, gain
+  and smoothing sliders, and the colour/band mapping text box.
+- **Spotlight:** radius, feather and motion sliders, plus toggle buttons.
+- **Area:** energy and cycle sliders, plus the tile-style buttons.
 - Runtime diagnostics and FFT band labels.
+
+See [Where each setting lives](#where-each-setting-lives) for which settings
+come from `parameters.txt`, which can be changed live, and which exist in only
+one of the two places.
 
 Tap or click a slider's value box to enter a precise numeric value. Type a
 number and press **Enter** to apply it; press **Escape** to cancel. Double-click
@@ -250,7 +256,19 @@ deterministic, GPU-friendly, and clipped to each tile.
 All startup settings are in
 [`Visualizer/data/parameters.txt`](./Visualizer/data/parameters.txt). Changes
 to this file require a restart. The controls window changes supported
-visualization settings only for the running session.
+visualization settings only for the running session; those edits are never
+written back to the file.
+
+### Where each setting lives
+
+| Group | Settings | `parameters.txt` | Controls window |
+|---|---|---|---|
+| **File only** (need a restart) | `useFullScreen`, `canvasWidth`, `canvasHeight`, `visualizationDisplay`, `controlsWindowWidth`, `controlsWindowHeight`, `fps`, `audioBufferSize` | Yes | No |
+| **File sets the startup value, controls change it live** | **Audio Response** sliders: `initialAudioSensitivity` (**Audio Sensitivity**), `maxFftFrequency`, `frequencyMappingExponent`, `bandOverlap`, `audioBandMultiplier`, `audioBloomMultiplier`, `audioBaseIntensityScale`, `baseImageSilenceFloor` (**Silence Floor**), `audioAttackTimeMs`, `audioReleaseTimeMs`. **Spotlight** sliders: `spotlightEnergyMultiplier`, `spotlightMinimumRadius`, `spotlightMaximumRadius`, `spotlightEdgeFeatherProportion`, `spotlightMotionUpdateIntervalMs`, `spotlightBrownianStep`, `spotlightMotionSmoothingTimeMs`. **Area** sliders: `areaEnergyMultiplier`, `areaCycleDurationSeconds` | Yes | Yes, one slider each |
+| **File sets the startup value, controls change it live** (non-slider) | `colorBandMapping` (text box in **Audio Response**), `startRevealMode` (mode buttons or `M`), `spotlightIndependentMaskPositions` and `spotlightKeepCirclesInsideImage` (**Spotlight** buttons), `areaRevealStyle` (**Area** buttons) | Yes | Yes |
+| **Controls window only** | **Base Image** slider and the per-colour **Solid** and **Bloom** sliders in **Mask Intensity** | No; the Base Image slider starts at `baseImageSilenceFloor` and the colour sliders start at 0 | Yes |
+
+A slider's startup value is also what a double-click on it resets to.
 
 The file uses `name=value` entries; lines beginning with `#` are comments.
 Keep each setting on its own line and do not quote values. Boolean values must
@@ -261,8 +279,8 @@ has an additional power-of-two requirement.
 
 The ranges below describe the values accepted at startup, not recommended
 targets. The current values in `parameters.txt` are a useful starting point.
-For live experimentation, the controls window exposes most audio, Spotlight,
-and Area parameters; those edits are not written back to the file.
+The tables mark each setting with where it can be changed (see the table
+above).
 
 ### Window and controls
 
@@ -293,7 +311,7 @@ and Area parameters; those edits are not written back to the file.
 | `audioAttackTimeMs` | 0-1000 ms | Smoothing time for rising audio levels. Lower values make mask brightness and reveal energy react more quickly; `0` applies rises immediately. |
 | `audioReleaseTimeMs` | 0-10000 ms | Smoothing time for falling audio levels. Higher values make colours and reveal effects linger after a sound; `0` applies falls immediately. |
 
-The live **Audio Sensitivity** control multiplies the FFT response and overall
+The live **Audio Sensitivity** control (**Controls > Audio Response**) multiplies the FFT response and overall
 audio energy; it is separate from `audioBandMultiplier`. If a visual layer is
 too dim or too bright, adjust sensitivity and the corresponding layer gain
 before changing frequency mapping. Mask solid and bloom intensities are each
@@ -357,4 +375,5 @@ limit has no visible effect.
 - **Unexpected band colours:** check `colorBandMapping`; its leftmost initial
   is the lowest FFT band.
 - **A setting does not persist:** edit `parameters.txt` and restart; live
-  controls are session-only.
+  controls are session-only. The **Base Image**, **Solid** and **Bloom**
+  sliders have no file entry, so they always start at their defaults.
