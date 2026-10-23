@@ -665,7 +665,7 @@ void drawVisualization() {
     tint(255 * baseIntensity, 255);
     if (useSpotlightBaseReveal) {
       spotlightBaseRevealShader.set("revealEnergy", spotlightEnergy);
-      spotlightBaseRevealShader.set("edgeFeather", max(0.01, spotlightEdgeFeatherProportion * 0.1));
+      spotlightBaseRevealShader.set("edgeFeather", max(0.02, spotlightEdgeFeatherProportion * 0.5));
       spotlightBaseRevealShader.set("imageAspect", imgW / imgH);
       shader(spotlightBaseRevealShader);
     }

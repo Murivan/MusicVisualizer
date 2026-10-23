@@ -20,8 +20,11 @@ void main() {
 
   // Squaring energy keeps the visible outer rim thin until the signal becomes stronger.
   float revealAmount = pow(clamp(revealEnergy, 0.0, 1.0), 2.0);
-  float innerRadius = (1.0 - revealAmount) * 0.5;
+  // The soft edge lies inside the hidden region and shrinks to nothing at full reveal,
+  // so the base is hidden at rest and fully visible at maximum energy.
+  float innerRadius = (1.0 - revealAmount) * (0.5 + edgeFeather);
   float visibility = smoothstep(innerRadius - edgeFeather, innerRadius, length(offset));
+  visibility = visibility * visibility * (3.0 - 2.0 * visibility);
   color.a *= visibility;
 
   gl_FragColor = color;

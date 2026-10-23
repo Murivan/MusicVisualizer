@@ -307,7 +307,7 @@ limit has no visible effect.
 | `spotlightEnergyMultiplier` | 0-100 | Scales audio energy before it is converted to spotlight size. Higher values make the spotlight reach its maximum radius at quieter sound levels. |
 | `spotlightMinimumRadius` | 0.01-2, in image-height units | Spotlight radius at low energy. For example, `0.5` is half the displayed image height. |
 | `spotlightMaximumRadius` | At least `spotlightMinimumRadius`, up to 2 image heights | Maximum radius at high energy. Values larger than the image can cover most or all of it. |
-| `spotlightEdgeFeatherProportion` | 0-1 | Soft-edge width as a proportion of the spotlight radius. `0` gives a sharp edge; larger values make the transition more gradual. |
+| `spotlightEdgeFeatherProportion` | 0-1 | Soft-edge width as a proportion of the spotlight radius. `0` gives a sharp edge; larger values make the transition more gradual. It also feathers the base-image ring: the ring's soft edge is this value times half the image width, with a small minimum. |
 | `spotlightMotionUpdateIntervalMs` | 1-60000 ms | Time between new random motion targets. Shorter intervals change direction more often. |
 | `spotlightBrownianStep` | 0.01-1 | Scale of each random target displacement relative to the image size. Larger values make the spotlight move farther between targets. |
 | `spotlightMotionSmoothingTimeMs` | 0-60000 ms | Time used to glide toward each new target. Lower values follow targets faster; `0` moves to each target immediately. |
