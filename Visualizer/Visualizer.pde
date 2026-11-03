@@ -2021,7 +2021,7 @@ String promptForAudioFile() {
     }
   };
   chooser.setDialogTitle("Select Audio File");
-  FileNameExtensionFilter filter = new FileNameExtensionFilter("Audio Files (.mp3, .wav, .aiff, .flac)", "mp3", "wav", "aiff", "flac");
+  FileNameExtensionFilter filter = new FileNameExtensionFilter("Audio Files (.mp3, .wav, .aiff)", "mp3", "wav", "aiff");
   chooser.setFileFilter(filter);
   chooser.setCurrentDirectory(new File(dataPath("")));
 
