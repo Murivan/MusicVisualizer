@@ -28,8 +28,27 @@ Visualizer/
     spotlight_reveal.glsl        Coloured-mask Spotlight shader
     spotlight_base_reveal.glsl   Base-image Spotlight shader
     area_reveal.glsl             AREA tile shader
-ImageAnalyzer.ipynb              Optional image/mask analysis notebook
+ImageAnalyzer.ipynb              Optional image/mask analysis notebook (Jupyter)
+ImageAnalyzer_App.ipynb          Same analysis as a Voila app (used by the standalone bundle)
+voila.json                       Voila settings (large uploads, hidden code)
+bundle/                          Launchers, requirements and user guide for the standalone bundle
+build/                           Bundle build scripts (Windows, macOS)
 ```
+
+## Standalone Image Analyzer bundle
+
+Users without Python can run the analyzer from a zip containing a private
+Python runtime. Build it on the target OS (runtimes cannot be cross-built):
+
+- **Windows:** `powershell -ExecutionPolicy Bypass -File build\build_windows.ps1`
+  produces `dist\ImageAnalyzer-windows-x64.zip`.
+- **macOS (Apple Silicon):** `bash build/build_macos.sh` produces
+  `dist/ImageAnalyzer-macos-arm64.zip`.
+
+Users unzip and double-click `Start.bat` / `Start.command`; results go to the
+`output` folder next to the launcher unless another folder is chosen. To run
+from source instead: `pip install -r bundle/requirements.txt`, then
+`python -m voila ImageAnalyzer_App.ipynb`.
 
 ## Requirements and startup
 
