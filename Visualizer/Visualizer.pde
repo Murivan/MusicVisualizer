@@ -91,6 +91,15 @@ float audioReleaseTimeMs = 500.0;     // Time constant for colored areas to fade
 float audioSampleRate = 0.0;
 int actualAudioBufferSize = audioBufferSize;
 
+// Live-input latency monitor. Written by the audio thread (listener) and the animation thread.
+volatile long lastAudioBlockNanos = 0;
+volatile float measuredBlockIntervalMs = 0.0;   // Smoothed time between capture blocks
+volatile float measuredBlockJitterMs = 0.0;     // Smoothed deviation of that interval
+volatile float mainFrameRate = 30.0;            // Measured frame rate of the visualization window
+final float LATENCY_TARGET_GOOD_MS = 25.0;
+final float LATENCY_TARGET_MAX_MS = 50.0;
+final float LATENCY_PANEL_HEIGHT = 120.0;
+
 // Spotlight Reveal Mode
 float spotlightEnergyMultiplier = 1.0;            // Scales audio level before converting it to spotlight area
 float spotlightMinimumRadius = 0.04;              // Quiet-sound radius as a fraction of the image height
@@ -633,6 +642,8 @@ void drawVisualization() {
   }
 
   float currentLevel = 0.0;
+  mainFrameRate = frameRate;
+  sampleLatencyAge();
   if (isAudioReady) {
     if (useAudioInput && in != null) {
       fft.forward(in.mix);
@@ -908,6 +919,91 @@ String formatFrequency(float frequency) {
   return nf(frequency, 1, 0) + " Hz";
 }
 
+// Runs on Minim's capture thread; timestamps each completed block of input samples.
+class BlockTimingListener implements AudioListener {
+  void samples(float[] samp) {
+    onBlock();
+  }
+
+  void samples(float[] left, float[] right) {
+    onBlock();
+  }
+
+  void onBlock() {
+    long now = System.nanoTime();
+    long previous = lastAudioBlockNanos;
+    lastAudioBlockNanos = now;
+    if (previous == 0) return;
+    float intervalMs = (now - previous) / 1000000.0;
+    if (measuredBlockIntervalMs == 0.0) {
+      measuredBlockIntervalMs = intervalMs;
+    } else {
+      float deviation = abs(intervalMs - measuredBlockIntervalMs);
+      measuredBlockIntervalMs += 0.05 * (intervalMs - measuredBlockIntervalMs);
+      measuredBlockJitterMs += 0.05 * (deviation - measuredBlockJitterMs);
+    }
+  }
+}
+
+// Age of the newest captured block at the moment the visualization frame draws.
+float latencyAgeAvgMs = 0.0;
+float latencyAgeMaxMs = 0.0;
+long latencyAgeMaxStampMs = 0;
+
+void sampleLatencyAge() {
+  if (!useAudioInput || lastAudioBlockNanos == 0) return;
+  float ageMs = (System.nanoTime() - lastAudioBlockNanos) / 1000000.0;
+  latencyAgeAvgMs += 0.05 * (ageMs - latencyAgeAvgMs);
+  long nowMs = System.currentTimeMillis();
+  // Peak decays after five seconds so the worst case reflects recent behaviour.
+  if (ageMs >= latencyAgeMaxMs || nowMs - latencyAgeMaxStampMs > 5000) {
+    latencyAgeMaxMs = ageMs;
+    latencyAgeMaxStampMs = nowMs;
+  }
+}
+
+void drawLatencyPanel(PApplet app, float panelTop) {
+  String[] lines;
+  color verdict = color(255);
+  if (!useAudioInput) {
+    lines = new String[] {"AUDIO LATENCY", "n/a (file playback)"};
+  } else if (measuredBlockIntervalMs <= 0.0 || audioSampleRate <= 0.0) {
+    lines = new String[] {"AUDIO LATENCY", "waiting for audio blocks..."};
+  } else {
+    float blockMs = actualAudioBufferSize * 1000.0 / audioSampleRate;
+    float frameMs = 1000.0 / max(1.0, mainFrameRate);
+    float avgMs = measuredBlockIntervalMs * 0.5 + latencyAgeAvgMs + frameMs;
+    float worstMs = measuredBlockIntervalMs + latencyAgeMaxMs + frameMs;
+    if (avgMs <= LATENCY_TARGET_GOOD_MS) verdict = color(0, 255, 80);
+    else if (avgMs <= LATENCY_TARGET_MAX_MS) verdict = color(255, 200, 0);
+    else verdict = color(255, 80, 60);
+    lines = new String[] {
+      "AUDIO LATENCY (software est.)",
+      "Estimated: " + nf(avgMs, 1, 1) + " ms avg, " + nf(worstMs, 1, 1) + " ms worst",
+      "Block: " + nf(blockMs, 1, 1) + " ms set, " + nf(measuredBlockIntervalMs, 1, 1) + " ms measured (+/-" + nf(measuredBlockJitterMs, 1, 1) + ")",
+      "Data age at draw: " + nf(latencyAgeAvgMs, 1, 1) + " ms avg, " + nf(latencyAgeMaxMs, 1, 1) + " ms peak",
+      "Smoothing: attack " + nf(audioAttackTimeMs, 1, 0) + " ms, release " + nf(audioReleaseTimeMs, 1, 0) + " ms",
+      "Excludes driver and hardware delay"
+    };
+  }
+
+  app.pushStyle();
+  app.textSize(16);
+  float panelWidth = 0;
+  for (String line : lines) panelWidth = max(panelWidth, app.textWidth(line));
+  float padding = 12;
+  float rowHeight = 24;
+  app.noStroke();
+  app.fill(0, 190);
+  app.rect(padding, panelTop, panelWidth + padding * 2, 16 + lines.length * rowHeight);
+  app.textAlign(LEFT, TOP);
+  for (int i = 0; i < lines.length; i++) {
+    app.fill(i == 0 || i == 1 ? verdict : color(255));
+    app.text(lines[i], padding * 2, panelTop + 10 + i * rowHeight);
+  }
+  app.popStyle();
+}
+
 void drawBandMapping(PApplet app, float panelTop) {
   int maxBin = getMaxAnalysisBin();
   float binWidth = audioSampleRate / actualAudioBufferSize;
@@ -1154,7 +1250,10 @@ class ControlsWindow extends PApplet {
     drawMappingField();
 
     drawStatusOverlay(this, diagnosticsTop);
-    if (isAudioReady) drawBandMapping(this, diagnosticsTop + 54);
+    if (isAudioReady) {
+      drawBandMapping(this, diagnosticsTop + 54);
+      drawLatencyPanel(this, diagnosticsTop + 54);
+    }
   }
 
   // Text box for colorBandMapping, shown at the bottom of the Audio Response section.
@@ -1978,6 +2077,7 @@ void setupAudio() {
     }
 
     in = minim.getLineIn(inputType, audioBufferSize);
+    in.addListener(new BlockTimingListener());
     actualAudioBufferSize = in.bufferSize();
     audioSampleRate = in.sampleRate();
     fft = new FFT(actualAudioBufferSize, audioSampleRate);

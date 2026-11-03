@@ -10,10 +10,10 @@ visualizationDisplay=0
 # The separate, resizable control window starts at these dimensions.
 controlsWindowWidth=900
 controlsWindowHeight=1080
-fps=30
+fps=60
 
 # Audio analysis
-audioBufferSize=2048
+audioBufferSize=512
 # Color masks and low-to-high FFT-band mapping. Use unique initials: B=blue, C=cyan,
 # R=red, O=orange, Y=yellow, G=green, M=magenta. The current setting uses BCROY.
 colorBandMapping=BCGROY
@@ -28,8 +28,8 @@ audioBloomMultiplier=1.0
 initialAudioSensitivity=2.0
 audioBaseIntensityScale=0.25
 baseImageSilenceFloor=0.0
-audioAttackTimeMs=50.0
-audioReleaseTimeMs=500.0
+audioAttackTimeMs=25.0
+audioReleaseTimeMs=250.0
 
 # Spotlight reveal mode (toggle at runtime with M)
 # Scales audio level before it is converted into spotlight area.
