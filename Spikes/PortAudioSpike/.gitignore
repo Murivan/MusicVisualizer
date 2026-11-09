@@ -1,0 +1,5 @@
+code/
+data/
+windows-amd64/
+macos-*/
+jna-lib/
