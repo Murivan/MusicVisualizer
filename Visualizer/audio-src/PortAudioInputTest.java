@@ -9,7 +9,7 @@ public class PortAudioInputTest {
     VisualizerWasapiTest.setDataDirectory(args[0]);
     sketch.audioBufferSize = args.length == 6 ? Integer.parseInt(args[5]) : 512;
     sketch.captureBufferSize = args.length == 6 ? Integer.parseInt(args[4]) : 128;
-    try (Visualizer.WasapiCapture input = sketch.new WasapiCapture()) {
+    try (Visualizer.PortAudioCapture input = sketch.new PortAudioCapture()) {
       String[] names = input.allDevices();
       String[] hosts = input.allHostApis();
       int[] types = input.allHostTypes();

@@ -72,9 +72,9 @@ public class AudioInputDialogTest {
     timer.start();
     Visualizer.InputChoice choice = sketch.promptForLiveInput(
         new String[] {"Java A", "Java B"},
-        new String[] {"WAS A", "ASIO A", "WAS B"},
-        new String[] {"WASAPI", "ASIO", "WASAPI"},
-        new int[] {13, 3, 13}, "");
+        new String[] {"WAS A", "ASIO A", "WAS B", "Core A"},
+        new String[] {"WASAPI", "ASIO", "WASAPI", "Core Audio"},
+        new int[] {13, 3, 13, 5}, "");
     timer.stop();
     if (error[0] != null) throw new AssertionError(error[0]);
     if (sketch.audioBufferSize != 512 || sketch.captureBufferSize != 256)
@@ -82,7 +82,9 @@ public class AudioInputDialogTest {
     if (action != JOptionPane.OK_OPTION) {
       if (choice != null) throw new AssertionError("Cancellation returned a selection");
     } else {
-      int expected = driverIndex == 0 ? deviceIndex : driverIndex == 1 ? (deviceIndex == 0 ? 0 : 2) : 1;
+      int expected = driverIndex == 0 ? deviceIndex
+        : driverIndex == 1 ? (deviceIndex == 0 ? 0 : 2)
+        : driverIndex == 2 ? 1 : 3;
       if (choice == null || choice.portAudio != (driverIndex != 0) || choice.deviceIndex != expected
           || !choice.mode.equals(driverIndex == 1 && modeIndex == 1 ? "exclusive" : "shared")
           || choice.audioFrames != 1024 || choice.captureFrames != (driverIndex == 0 ? 256 : 128)) {
@@ -159,6 +161,7 @@ public class AudioInputDialogTest {
     test(sketch, 2, 0, 1, JOptionPane.OK_OPTION);
     test(sketch, 1, 0, 0, JOptionPane.CANCEL_OPTION);
     test(sketch, 0, 0, 0, -1);
+    test(sketch, 3, 0, 1, JOptionPane.OK_OPTION);
     testNonPowerDefault(sketch, false);
     testNonPowerDefault(sketch, true);
     System.out.println("Audio input dialog tests passed");

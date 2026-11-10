@@ -6,9 +6,8 @@ This handoff is for an agent continuing MusicVisualizer development on an
 Apple Silicon Mac. The user wants lower-latency live audio input, preferably
 below 25 ms and definitely below 50 ms **end to end**, without an external
 helper process. WASAPI is available on Windows; ASIO is useful but optional.
-The next agreed direction is to evaluate Core Audio on macOS through
-PortAudio, starting with a small spike before integrating it into the main
-application.
+The agreed direction was to evaluate Core Audio on macOS through PortAudio,
+starting with a small spike before integrating it into the main application.
 
 The original Windows machine was on branch `dev` at commit `c3991dd`
 (`Portaudio for Windows first implementation`) when this handoff was written.
@@ -20,16 +19,17 @@ Do not overwrite existing user changes.
 
 - [Visualizer/Visualizer.pde](Visualizer/Visualizer.pde) is the Processing
   sketch. Minim provides file playback, FFT and Java Sound live input.
-- [Visualizer/audio-src/WasapiInput.java](Visualizer/audio-src/WasapiInput.java)
-  implements JNA/PortAudio live capture. It enumerates PortAudio host APIs
-  and devices, supports WASAPI shared/exclusive on Windows, and deliberately
-  rejects non-Windows platforms today.
+- [Visualizer/audio-src/PortAudioInput.java](Visualizer/audio-src/PortAudioInput.java)
+  is the shared JNA/PortAudio live-capture backend. It enumerates host APIs
+  and devices on Windows x64 and macOS arm64; exclusive mode is guarded to
+  Windows WASAPI only. [Visualizer/audio-src/WasapiInput.java](Visualizer/audio-src/WasapiInput.java)
+  retains the old class name as a compatibility wrapper.
 - [Visualizer/audio-src/RollingAudioBuffer.java](Visualizer/audio-src/RollingAudioBuffer.java)
   maintains a synchronized rolling mono FFT window. Capture reads and FFT
   window sizes are independent; up to two input channels are averaged.
-- `WasapiCapture` in the main sketch loads the backend jar, JNA and
-  `portaudio.dll` from `data/wasapi` through a separate class loader. Both
-  names and paths are Windows-specific. The existing chooser groups devices
+- `PortAudioCapture` in the main sketch loads the backend jar, JNA and native
+  library from the platform-specific data directory through a separate class
+  loader. The existing chooser groups devices
   by driver/host API and provides WASAPI mode and power-of-two buffer
   dropdowns. The PortAudio capture dropdown is disabled for Java Sound;
   mode selection is effective only for WASAPI. Changes apply per run.
@@ -37,6 +37,10 @@ Do not overwrite existing user changes.
   stages the Windows backend. [Visualizer/export-windows.ps1](Visualizer/export-windows.ps1)
   produces and checks a new Windows export. The generated `data/wasapi`
   directory is ignored by Git; do not assume it travels with the repository.
+- [Visualizer/setup-coreaudio.sh](Visualizer/setup-coreaudio.sh) validates and
+  stages macOS arm64 dependencies in the ignored `data/coreaudio` directory.
+  [Visualizer/export-macos.sh](Visualizer/export-macos.sh) checks a macOS
+  export; Processing's arm64 export is currently blocked on this machine.
 - [Spikes/PortAudioSpike](Spikes/PortAudioSpike) is the earlier Windows spike.
   Its native binaries and setup are Windows-specific; use it for design
   reference, not as a ready-made macOS solution.
@@ -56,6 +60,71 @@ some hardware but stalled or performed poorly on another device; do not
 remove or silently disable it because of device-specific issues. No physical
 end-to-end latency target has been verified, and ASIO redistribution rights
 have not been established.
+
+## Mac continuation status
+
+On 2026-11-10 the checkout was clean on `dev` at `origin/dev`. The machine is
+arm64 macOS 27.2.1; Processing 4.5.7 uses its bundled Eclipse Temurin
+17.0.20.1 aarch64 JVM. Minim is already installed. System audio inventory
+shows the MacBook Pro microphone and a MOTU M4 input.
+
+The dependency check found Homebrew PortAudio 19.7.0 (MIT), installed from
+the Homebrew Core formula and configured with
+`--enable-mac-universal=no --enable-cxx` plus Homebrew's standard configure
+arguments. `libportaudio.2.dylib` is arm64-only and links CoreAudio,
+AudioToolbox, AudioUnit, CoreFoundation and system libraries. Processing
+bundles JNA 5.19.1, whose jar includes an arm64 macOS `jnidispatch` binary;
+its license is `Apache-2.0 OR LGPL-2.1-or-later`. These are local spike
+dependencies, not a portable redistributable bundle.
+
+An isolated probe and run instructions are in
+[Spikes/CoreAudioSpike](Spikes/CoreAudioSpike/README.md). ABI checks passed
+on the actual Processing JVM: PortAudio host/device/stream structure layouts
+have the expected LP64 sizes and offsets. PortAudio reports the Core Audio
+host API (type 5), the MacBook Pro microphone (44.1 kHz, 1 channel), and the
+M4 (44.1 kHz, up to 8 channels).
+
+Both inputs completed 10-second captures at 64, 128 and 256 read frames with
+a 512-frame rolling window. There were zero overflows across all six runs.
+At 64/128/256 frames, the MacBook microphone reported 126.12/127.57/130.48 ms
+input latency; the M4's first two channels reported 57.14/58.59/58.59 ms.
+Mean block intervals tracked the requested sizes (1.45/2.90/5.81 ms).
+Non-silent activity was detected. The 128-frame M4 run peaked at full scale;
+confirm its input gain/source. Latency changed little with read size and
+remained much higher than block duration. PortAudio-reported input latency
+is not end-to-end audio-to-display latency and does not establish the target.
+
+Microphone access was granted in the command-run context (capture succeeded)
+without a permission prompt appearing. The responsible app shown in macOS
+privacy settings was not confirmed. Denial behavior, sustained-load capture,
+exported-app permission and clean-machine behavior remain unverified.
+
+## PortAudio integration status
+
+The shared backend and sketch loader now support Windows x64 and macOS arm64.
+The existing `WasapiInput` class name remains as a compatibility wrapper;
+WASAPI exclusive structures and mode stay Windows-only. Core Audio capture
+uses the device's default-low latency hint (or the read duration, whichever
+is greater) as its suggested latency. In a 5-second integrated-backend test,
+both the MacBook Pro microphone and MOTU M4 produced blocks with zero
+overflows; a Processing sketch class-loader test also opened the M4 with zero
+overflows. `AudioInputDialogTest` passed with a Core Audio host option.
+`setup-coreaudio.sh` verifies the arm64 dylib, Core Audio linkage, JNA native
+payload and code signature before staging the library unchanged with license
+notices in the ignored `Visualizer/data/coreaudio` directory. The Mac spike's
+first library-rewrite approach invalidated its signature; the final setup
+script no longer rewrites the binary and verifies its signature.
+
+`processing-java --build` succeeds. Processing 4.5.7 arm64 export is blocked:
+`processing-java --variant=macos-aarch64 --export` throws
+`NoSuchElementException` in `JavaBuild.exportApplication` and leaves an
+incomplete `.app` (no `Info.plist`). The new
+[Visualizer/export-macos.sh](Visualizer/export-macos.sh) refuses to report an
+incomplete bundle as successful, but cannot currently produce a usable app.
+See [Processing issue #1193](https://github.com/processing/processing4/issues/1193).
+Exported-app microphone authorization, code signing/notarization, visual
+end-to-end testing and clean-machine operation remain blocked. Windows
+regression tests also remain outstanding from this Mac.
 
 ## First phase: Mac spike
 

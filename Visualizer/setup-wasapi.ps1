@@ -13,16 +13,21 @@ try {
   New-Item -ItemType Directory -Path $temporary | Out-Null
   & (Join-Path $JdkBin 'javac.exe') -cp $jna -d $temporary `
     (Join-Path $here 'audio-src\RollingAudioBuffer.java') `
+    (Join-Path $here 'audio-src\PortAudioInput.java') `
     (Join-Path $here 'audio-src\WasapiInput.java') `
     (Join-Path $here 'audio-src\WasapiInputTest.java') `
+    (Join-Path $here 'audio-src\PortAudioInputLayoutTest.java') `
     (Join-Path $here 'audio-src\RollingAudioBufferTest.java')
   if ($LASTEXITCODE -ne 0) { throw 'WASAPI compilation failed' }
   & (Join-Path $JdkBin 'java.exe') -cp $temporary RollingAudioBufferTest
   if ($LASTEXITCODE -ne 0) { throw 'Rolling buffer tests failed' }
   & (Join-Path $JdkBin 'java.exe') -cp "$temporary;$jna" WasapiInputTest
   if ($LASTEXITCODE -ne 0) { throw 'WASAPI tests failed' }
+  & (Join-Path $JdkBin 'java.exe') -cp "$temporary;$jna" PortAudioInputLayoutTest
+  if ($LASTEXITCODE -ne 0) { throw 'PortAudio layout tests failed' }
   Remove-Item -LiteralPath (Join-Path $temporary 'RollingAudioBufferTest.class')
   Remove-Item -LiteralPath (Join-Path $temporary 'WasapiInputTest.class')
+  Remove-Item -LiteralPath (Join-Path $temporary 'PortAudioInputLayoutTest.class')
   New-Item -ItemType Directory -Force -Path $target | Out-Null
   & (Join-Path $JdkBin 'jar.exe') cf (Join-Path $target 'wasapi-backend.jar') -C $temporary .
   if ($LASTEXITCODE -ne 0) { throw 'WASAPI jar creation failed' }

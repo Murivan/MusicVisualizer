@@ -13,11 +13,11 @@ controlsWindowHeight=1080
 fps=60
 
 # Audio analysis
-# Default driver selected at startup (minim or wasapi); choose any available
-# driver and device in the startup dialog. File playback always uses Minim.
+# Initial live-input driver preference (minim, portaudio, or legacy wasapi).
+# Choose any available driver and device in the startup dialog. File playback uses Minim.
 liveInputBackend=wasapi
 # Default selection in the WASAPI startup dialog: shared or exclusive.
-# Exclusive mode requires a compatible device and can prevent other applications from using it.
+# Exclusive mode is Windows WASAPI-only and can prevent other apps using the input.
 wasapiMode=shared
 # Default buffer sizes in the live-input startup dialog. PortAudio capture read
 # size is separate from the audio / FFT window; file playback uses audioBufferSize.

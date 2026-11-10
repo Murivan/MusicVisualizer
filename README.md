@@ -131,7 +131,7 @@ startup value. Double-click an EQ fader to reset that band's sensitivity to
 
 The sketch uses Minim to play a selected audio file. For live input, the
 startup chooser lists Java Sound (Minim) and the input drivers detected by
-the optional Windows PortAudio backend. Each frame:
+the optional PortAudio backend. Each frame:
 
 1. The source buffer is sent to the FFT.
 2. Overall audio level drives base-image brightness and reveal-mode energy.
@@ -202,14 +202,68 @@ longer), the control window reports a stall rather than continuing to show
 stale audio. A native call that itself hangs is not covered by this check.
 Run `setup-wasapi.ps1` again after updating the backend source.
 
-The generated `data\wasapi` directory must accompany the sketch or exported
-application; Processing exports its `data` directory. The exported sketch's
-loader was tested with its bundled JVM on the development machine; a GUI
-end-to-end test and clean-machine operation still need validation. PortAudio
-capture on macOS is not implemented. The control panel shows the selected
-WASAPI mode and reports PortAudio's
-input latency and capture timing, not end-to-end audio-to-display latency.
-FFT windowing, smoothing, graphics and display delay remain additional factors.
+The generated `data\wasapi` directory must accompany the Windows sketch or
+export; Processing exports its `data` directory. The control panel reports
+PortAudio's input latency and capture timing, not end-to-end audio-to-display
+latency. FFT windowing, smoothing, graphics and display delay remain
+additional factors.
+
+### PortAudio live input (macOS arm64)
+
+The shared PortAudio backend also supports Core Audio on macOS arm64.
+File playback remains on Minim. WASAPI exclusive mode is Windows-only; the
+mode selector is disabled for Core Audio and other non-WASAPI hosts.
+
+With Homebrew PortAudio installed and Processing 4's bundled JDK/JNA
+available, stage and validate the native dependencies:
+
+```sh
+bash Visualizer/setup-coreaudio.sh
+```
+
+By default the script uses Processing's bundled JDK and JNA 5.19.1 plus
+Homebrew's arm64 PortAudio 19.7.0. Override `PROCESSING_JAVA_HOME`, `JNA_JAR`,
+``PORTAUDIO_LIB`, or `PORTAUDIO_LICENSE` if they are installed elsewhere. The
+script verifies arm64/Core Audio support and JNA's arm64 native payload,
+preserves and validates any existing native code signature, compiles the
+shared backend, runs ABI and rolling-buffer tests, copies license notices,
+and stages files in `Visualizer/data/coreaudio/`. It refuses to overwrite an
+existing staged directory. The Homebrew dylib is copied without rewriting its
+install name because doing so invalidates its code signature. PortAudio's
+remaining dependencies are system frameworks. Review both licenses and
+redistribution requirements before distributing any export.
+
+Run a real-input stability check with microphone access enabled:
+
+```sh
+bash Visualizer/test-coreaudio.sh "Core Audio" "M4" 60 128 512
+```
+
+Arguments are host API fragment, unique input-device fragment, duration in
+seconds, capture frames per read and rolling FFT-window size. The test
+requires finite, non-silent samples, reports blocks/latency/overflows, and
+fails on capture errors, stalls or any overflows. For built-in microphone
+testing, replace `M4` with `MacBook Pro Microphone`. macOS microphone privacy
+authorization depends on the launch context; allow access for the app
+responsible for the JVM. The command-line test does not prove permissions in
+the exported app.
+
+To export to a new directory:
+
+```sh
+bash Visualizer/export-macos.sh /path/to/new-export
+```
+
+The export script checks the app executable architecture, copied dependencies,
+and `NSMicrophoneUsageDescription`, and refuses to overwrite an existing
+destination. Editing `Info.plist` can invalidate app signing, so sign and
+notarize the finished app afterward as required. Processing 4.5.7 currently
+fails arm64 CLI export with `NoSuchElementException` in
+`JavaBuild.exportApplication` on this Mac; the script detects the incomplete
+bundle and leaves the partial output for inspection. See
+[Processing issue #1193](https://github.com/processing/processing4/issues/1193).
+Until Processing export works, app-bundle layout, privacy prompt, signing,
+clean-machine operation and visualizer GUI behavior remain unverified.
 
 For a repeatable capture-stability check (not end-to-end latency), run for
 example:
@@ -484,8 +538,8 @@ above).
 
 | Setting | Accepted values | What it changes |
 |---|---|---|
-| `liveInputBackend` | `minim` or `wasapi` | Initial driver selection in the live-input chooser. Other available drivers can be selected there; PortAudio requires Windows x64 and setup above. File playback always uses Minim. |
-| `wasapiMode` | `shared` or `exclusive` | Default WASAPI mode shown in the startup dialog; the selection can be changed for the current run. Ignored for Minim and file playback. Defaults to `shared`. |
+| `liveInputBackend` | `minim`, `portaudio`, or legacy `wasapi` | Initial driver preference in the live-input chooser. Other available drivers can be selected there. PortAudio requires platform setup on Windows x64 or macOS arm64. File playback always uses Minim. |
+| `wasapiMode` | `shared` or `exclusive` | Default WASAPI mode shown in the startup dialog; applies only to WASAPI and can be changed for the current run. Ignored for other drivers and file playback. Defaults to `shared`. |
 | `captureBufferSize` | 32-8192 frames | Default PortAudio capture read size; live-input startup choices are powers of two. A configured non-power-of-two requires an explicit startup selection. Independent of the FFT window and not used by Minim. |
 | `audioBufferSize` | Power of two from 32-65536 | Default FFT-window size; can be changed at live-input startup. Also the Minim input buffer size and the file-playback buffer size. Larger windows provide finer frequency spacing but respond less immediately. |
 | `colorBandMapping` | Unique initials from `B`, `C`, `R`, `O`, `Y`, `G`, `M` | Chooses which colour masks are active and assigns them from the lowest to highest FFT band, left to right. For example, `BCROY` assigns blue to the lowest band and yellow to the highest. A shorter mapping uses fewer masks; all masks are preloaded. Editable in **Controls > Audio Response** by entering initials and pressing Enter. |
