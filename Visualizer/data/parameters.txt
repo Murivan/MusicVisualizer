@@ -13,6 +13,16 @@ controlsWindowHeight=1080
 fps=60
 
 # Audio analysis
+# Default driver selected at startup (minim or wasapi); choose any available
+# driver and device in the startup dialog. File playback always uses Minim.
+liveInputBackend=wasapi
+# Default selection in the WASAPI startup dialog: shared or exclusive.
+# Exclusive mode requires a compatible device and can prevent other applications from using it.
+wasapiMode=shared
+# Default buffer sizes in the live-input startup dialog. PortAudio capture read
+# size is separate from the audio / FFT window; file playback uses audioBufferSize.
+# Startup choices are powers of two: 32-8192 capture frames, 32-65536 audio samples.
+captureBufferSize=256
 audioBufferSize=512
 # Color masks and low-to-high FFT-band mapping. Use unique initials: B=blue, C=cyan,
 # R=red, O=orange, Y=yellow, G=green, M=magenta. The current setting uses BCROY.

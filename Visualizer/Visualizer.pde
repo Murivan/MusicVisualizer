@@ -41,6 +41,11 @@ Minim minim;
 AudioPlayer track;
 AudioInput in;
 FFT fft;
+volatile WasapiCapture wasapiInput;
+String activeInputDriver = "";
+boolean activeWasapi = false;
+final Object audioLifecycleLock = new Object();
+boolean audioDisposed = false;
 boolean useAudioInput = false;
 String audioFileName = "";
 volatile boolean isAudioReady = false;
@@ -60,6 +65,9 @@ ControlsWindow controlsWindow;
 
 // Audio Configuration
 int audioBufferSize = 2048;           // Size of the audio buffer (also dictates FFT resolution)
+String liveInputBackend = "minim";   // Default driver in the startup chooser
+String wasapiMode = "shared";        // "shared" or "exclusive"
+int captureBufferSize = 256;         // PortAudio read size in frames, independent of the FFT window
 float maxFftFrequency = 20000.0;       // The maximum frequency (Hz) analyzed and mapped across the masks
 float frequencyMappingExponent = 3.5; // 1.0 is linear; higher values give lower frequencies more masks
 float bandOverlap = 0.0;              // 0 = no overlap; each band widens by this fraction of its width (max 0.95)
@@ -95,10 +103,6 @@ int actualAudioBufferSize = audioBufferSize;
 volatile long lastAudioBlockNanos = 0;
 volatile float measuredBlockIntervalMs = 0.0;   // Smoothed time between capture blocks
 volatile float measuredBlockJitterMs = 0.0;     // Smoothed deviation of that interval
-volatile float mainFrameRate = 30.0;            // Measured frame rate of the visualization window
-final float LATENCY_TARGET_GOOD_MS = 25.0;
-final float LATENCY_TARGET_MAX_MS = 50.0;
-final float LATENCY_PANEL_HEIGHT = 120.0;
 
 // Spotlight Reveal Mode
 float spotlightEnergyMultiplier = 1.0;            // Scales audio level before converting it to spotlight area
@@ -298,6 +302,13 @@ void loadParameters() {
   } else {
     println("Ignoring audioBufferSize: value must be a power of two.");
   }
+  String backendName = parameters.getProperty("liveInputBackend", liveInputBackend).trim().toLowerCase(java.util.Locale.ROOT);
+  if (backendName.equals("minim") || backendName.equals("wasapi")) liveInputBackend = backendName;
+  else println("Ignoring liveInputBackend: expected minim or wasapi.");
+  String modeName = parameters.getProperty("wasapiMode", wasapiMode).trim().toLowerCase(java.util.Locale.ROOT);
+  if (modeName.equals("shared") || modeName.equals("exclusive")) wasapiMode = modeName;
+  else println("Ignoring wasapiMode: expected shared or exclusive.");
+  captureBufferSize = getIntParameter(parameters, "captureBufferSize", captureBufferSize, 32, 8192);
 
   maxFftFrequency = getFloatParameter(parameters, "maxFftFrequency", maxFftFrequency, 1.0, 192000.0);
   frequencyMappingExponent = getFloatParameter(parameters, "frequencyMappingExponent", frequencyMappingExponent, 0.1, 20.0);
@@ -642,10 +653,17 @@ void drawVisualization() {
   }
 
   float currentLevel = 0.0;
-  mainFrameRate = frameRate;
   sampleLatencyAge();
   if (isAudioReady) {
-    if (useAudioInput && in != null) {
+    if (useAudioInput && wasapiInput != null) {
+      if (wasapiInput.failure().length() == 0) {
+        wasapiInput.snapshot();
+      } else java.util.Arrays.fill(wasapiInput.samples, 0.0);
+      fft.forward(wasapiInput.samples);
+      float squared = 0.0;
+      for (float sample : wasapiInput.samples) squared += sample * sample;
+      currentLevel = sqrt(squared / wasapiInput.samples.length);
+    } else if (useAudioInput && in != null) {
       fft.forward(in.mix);
       currentLevel = in.mix.level();
     } else if (!useAudioInput && track != null) {
@@ -951,6 +969,7 @@ float latencyAgeMaxMs = 0.0;
 long latencyAgeMaxStampMs = 0;
 
 void sampleLatencyAge() {
+  if (wasapiInput != null) lastAudioBlockNanos = wasapiInput.lastBlockNanos();
   if (!useAudioInput || lastAudioBlockNanos == 0) return;
   float ageMs = (System.nanoTime() - lastAudioBlockNanos) / 1000000.0;
   latencyAgeAvgMs += 0.05 * (ageMs - latencyAgeAvgMs);
@@ -967,23 +986,33 @@ void drawLatencyPanel(PApplet app, float panelTop) {
   color verdict = color(255);
   if (!useAudioInput) {
     lines = new String[] {"AUDIO LATENCY", "n/a (file playback)"};
+  } else if (wasapiInput != null) {
+    String failure = wasapiInput.failure();
+    if (failure.length() > 0) {
+      lines = new String[] {activeInputDriver + " INPUT ERROR", failure};
+      verdict = color(255, 80, 60);
+    } else {
+      lines = new String[] {
+        activeInputDriver + (activeWasapi ? " " + wasapiMode.toUpperCase(java.util.Locale.ROOT) : "") + " INPUT (not end-to-end)",
+        "Host-reported latency: " + nf((float)wasapiInput.inputLatencyMs(), 1, 1) + " ms",
+        "Read: " + captureBufferSize + " frames, interval "
+          + nf((float)wasapiInput.intervalMs(), 1, 1) + " ms, jitter "
+          + nf((float)wasapiInput.jitterMs(), 1, 1) + " ms",
+        "Block age at draw: " + nf(latencyAgeAvgMs, 1, 1) + " ms avg; overflows: " + wasapiInput.overflows(),
+        "FFT window: " + actualAudioBufferSize + " samples; attack " + nf(audioAttackTimeMs, 1, 0) + " ms",
+        "Hardware and display delay not measured"
+      };
+    }
   } else if (measuredBlockIntervalMs <= 0.0 || audioSampleRate <= 0.0) {
     lines = new String[] {"AUDIO LATENCY", "waiting for audio blocks..."};
   } else {
     float blockMs = actualAudioBufferSize * 1000.0 / audioSampleRate;
-    float frameMs = 1000.0 / max(1.0, mainFrameRate);
-    float avgMs = measuredBlockIntervalMs * 0.5 + latencyAgeAvgMs + frameMs;
-    float worstMs = measuredBlockIntervalMs + latencyAgeMaxMs + frameMs;
-    if (avgMs <= LATENCY_TARGET_GOOD_MS) verdict = color(0, 255, 80);
-    else if (avgMs <= LATENCY_TARGET_MAX_MS) verdict = color(255, 200, 0);
-    else verdict = color(255, 80, 60);
     lines = new String[] {
-      "AUDIO LATENCY (software est.)",
-      "Estimated: " + nf(avgMs, 1, 1) + " ms avg, " + nf(worstMs, 1, 1) + " ms worst",
+      "MINIM INPUT TIMING (not end-to-end)",
       "Block: " + nf(blockMs, 1, 1) + " ms set, " + nf(measuredBlockIntervalMs, 1, 1) + " ms measured (+/-" + nf(measuredBlockJitterMs, 1, 1) + ")",
       "Data age at draw: " + nf(latencyAgeAvgMs, 1, 1) + " ms avg, " + nf(latencyAgeMaxMs, 1, 1) + " ms peak",
       "Smoothing: attack " + nf(audioAttackTimeMs, 1, 0) + " ms, release " + nf(audioReleaseTimeMs, 1, 0) + " ms",
-      "Excludes driver and hardware delay"
+      "Driver, hardware and display delay not measured"
     };
   }
 
@@ -1971,6 +2000,226 @@ class Button {
   }
 }
 
+// The optional backend and JNA are loaded from data/ so Processing can still build
+// the sketch without treating JNA as an installed Processing library.
+class WasapiCapture implements AutoCloseable {
+  java.net.URLClassLoader loader;
+  Object backend;
+  Class<?> backendClass;
+  float[] samples;
+
+  WasapiCapture() throws Exception {
+    File directory = new File(dataPath("wasapi"));
+    File backendJar = new File(directory, "wasapi-backend.jar");
+    File jnaJar = new File(directory, "jna.jar");
+    File dll = new File(directory, "portaudio.dll");
+    if (!backendJar.isFile() || !jnaJar.isFile() || !dll.isFile()) {
+      throw new java.io.IOException("WASAPI dependencies are missing from " + directory
+        + ". Run setup-wasapi.ps1 as described in README.");
+    }
+    loader = new java.net.URLClassLoader(new java.net.URL[] {
+      backendJar.toURI().toURL(), jnaJar.toURI().toURL()
+    }, getClass().getClassLoader());
+    try {
+      backendClass = loader.loadClass("WasapiInput");
+      try {
+        backendClass.getMethod("open", int.class, int.class, int.class, boolean.class);
+        backendClass.getMethod("openAny", int.class, int.class, int.class, boolean.class);
+        backendClass.getMethod("allDevices");
+        backendClass.getMethod("allHostApis");
+        backendClass.getMethod("allHostTypes");
+      } catch (NoSuchMethodException error) {
+        throw new java.io.IOException("PortAudio backend is outdated; rerun setup-wasapi.ps1.");
+      }
+      backend = backendClass.getConstructor(String.class).newInstance(dll.getAbsolutePath());
+    } catch (Exception | LinkageError error) {
+      loader.close();
+      throw error;
+    }
+  }
+
+  Object call(String name, Class<?>[] types, Object... args) {
+    try {
+      return backendClass.getMethod(name, types).invoke(backend, args);
+    } catch (ReflectiveOperationException error) {
+      throw new IllegalStateException("WASAPI " + name + " failed", error);
+    }
+  }
+
+  Object call(String name) { return call(name, new Class<?>[0]); }
+  String[] devices() { return (String[])call("devices"); }
+  String[] allDevices() { return (String[])call("allDevices"); }
+  String[] allHostApis() { return (String[])call("allHostApis"); }
+  int[] allHostTypes() { return (int[])call("allHostTypes"); }
+  String failure() { return (String)call("error"); }
+  long lastBlockNanos() { return ((Number)call("lastBlockNanos")).longValue(); }
+  long overflows() { return ((Number)call("overflows")).longValue(); }
+  double intervalMs() { return ((Number)call("intervalMs")).doubleValue(); }
+  double jitterMs() { return ((Number)call("jitterMs")).doubleValue(); }
+  double inputLatencyMs() { return ((Number)call("inputLatencyMs")).doubleValue(); }
+  float sampleRate() { return ((Number)call("sampleRate")).floatValue(); }
+  void snapshot() { call("snapshot", new Class<?>[] {float[].class}, samples); }
+
+  void open(int selection) {
+    samples = new float[audioBufferSize];
+    call("open", new Class<?>[] {int.class, int.class, int.class, boolean.class},
+      selection, captureBufferSize, audioBufferSize, wasapiMode.equals("exclusive"));
+  }
+
+  void openAny(int selection) {
+    samples = new float[audioBufferSize];
+    call("openAny", new Class<?>[] {int.class, int.class, int.class, boolean.class},
+      selection, captureBufferSize, audioBufferSize, wasapiMode.equals("exclusive") && activeWasapi);
+  }
+
+  public void close() throws Exception {
+    try {
+      ((AutoCloseable)backend).close();
+    } finally {
+      loader.close();
+    }
+  }
+}
+
+String describeAudioError(Throwable error) {
+  while (error.getCause() != null) error = error.getCause();
+  return error.toString();
+}
+
+class InputChoice {
+  final boolean portAudio;
+  final int deviceIndex;
+  final String driver;
+  final String mode;
+  final int captureFrames;
+  final int audioFrames;
+  InputChoice(boolean portAudio, int deviceIndex, String driver, String mode, int captureFrames, int audioFrames) {
+    this.portAudio = portAudio;
+    this.deviceIndex = deviceIndex;
+    this.driver = driver;
+    this.mode = mode;
+    this.captureFrames = captureFrames;
+    this.audioFrames = audioFrames;
+  }
+}
+
+javax.swing.JComboBox<Integer> bufferSizeChoices(int maximum, int configured) {
+  javax.swing.JComboBox<Integer> choices = new javax.swing.JComboBox<Integer>();
+  for (int size = 32; size <= maximum; size *= 2) choices.addItem(size);
+  choices.setSelectedIndex(-1);
+  choices.setSelectedItem(configured);
+  return choices;
+}
+
+InputChoice promptForLiveInput(String[] mixerNames, String[] names, String[] apis, int[] types, String unavailable) {
+  if (names.length != apis.length || names.length != types.length)
+    throw new IllegalStateException("PortAudio returned inconsistent device information.");
+  java.util.LinkedHashMap<String, ArrayList<Integer>> groups = new java.util.LinkedHashMap<String, ArrayList<Integer>>();
+  if (mixerNames.length > 0) groups.put("Java Sound (Minim)", new ArrayList<Integer>());
+  for (int i = 0; i < mixerNames.length; i++) groups.get("Java Sound (Minim)").add(i);
+  for (int i = 0; i < names.length; i++) {
+    String key = apis[i] + " (PortAudio)";
+    if (!groups.containsKey(key)) groups.put(key, new ArrayList<Integer>());
+    groups.get(key).add(i);
+  }
+  if (groups.isEmpty()) throw new IllegalStateException("No audio input devices available. " + unavailable);
+  javax.swing.JComboBox<String> driver = new javax.swing.JComboBox<String>(groups.keySet().toArray(new String[0]));
+  javax.swing.JComboBox<String> device = new javax.swing.JComboBox<String>();
+  javax.swing.JComboBox<String> mode = new javax.swing.JComboBox<String>(new String[] {"Shared", "Exclusive"});
+  javax.swing.JComboBox<Integer> captureSize = bufferSizeChoices(8192, captureBufferSize);
+  javax.swing.JComboBox<Integer> audioSize = bufferSizeChoices(65536, audioBufferSize);
+  mode.setSelectedIndex(wasapiMode.equals("exclusive") ? 1 : 0);
+  Runnable update = () -> {
+    String selected = (String)driver.getSelectedItem();
+    device.removeAllItems();
+    if (selected == null) return;
+    boolean javaSound = selected.equals("Java Sound (Minim)");
+    captureSize.setEnabled(!javaSound);
+    ArrayList<Integer> entries = groups.get(selected);
+    for (int index : entries) device.addItem(javaSound ? mixerNames[index] : names[index]);
+    boolean isWasapi = !javaSound && !entries.isEmpty() && types[entries.get(0)] == 13;
+    mode.setEnabled(isWasapi);
+  };
+  driver.addActionListener(event -> update.run());
+  if (liveInputBackend.equals("wasapi")) {
+    for (String group : groups.keySet()) {
+      ArrayList<Integer> entries = groups.get(group);
+      if (!group.equals("Java Sound (Minim)") && !entries.isEmpty() && types[entries.get(0)] == 13) {
+        driver.setSelectedItem(group);
+        break;
+      }
+    }
+  }
+  update.run();
+  javax.swing.JPanel panel = new javax.swing.JPanel();
+  panel.setLayout(new javax.swing.BoxLayout(panel, javax.swing.BoxLayout.Y_AXIS));
+  panel.add(new javax.swing.JLabel("Audio driver:"));
+  panel.add(driver);
+  panel.add(new javax.swing.JLabel("Input device:"));
+  panel.add(device);
+  panel.add(new javax.swing.JLabel("WASAPI mode (WASAPI only):"));
+  panel.add(mode);
+  panel.add(new javax.swing.JLabel("PortAudio capture buffer (power of two, 32-8192 frames):"));
+  panel.add(captureSize);
+  panel.add(new javax.swing.JLabel("Audio / FFT buffer (power of two, 32-65536 samples):"));
+  panel.add(audioSize);
+  javax.swing.JLabel validation = new javax.swing.JLabel(" ");
+  validation.setForeground(java.awt.Color.RED);
+  if (captureSize.getSelectedIndex() < 0)
+    validation.setText("Configured PortAudio capture size " + captureBufferSize + " is not available; select a size.");
+  panel.add(validation);
+  panel.add(new javax.swing.JLabel("Exclusive mode may prevent other applications from using this input."));
+  panel.add(new javax.swing.JLabel("ASIO appears only with an ASIO-enabled PortAudio library."));
+  if (unavailable.length() > 0) panel.add(new javax.swing.JLabel("<html>PortAudio unavailable: " + unavailable.replace("&", "&amp;").replace("<", "&lt;") + "</html>"));
+  JOptionPane pane = new JOptionPane(panel, JOptionPane.QUESTION_MESSAGE, JOptionPane.OK_CANCEL_OPTION);
+  JDialog dialog = pane.createDialog(null, "Audio Input Selection");
+  dialog.setAlwaysOnTop(true);
+  try {
+    while (true) {
+      pane.setValue(JOptionPane.UNINITIALIZED_VALUE);
+      dialog.setVisible(true);
+      Object choice = pane.getValue();
+      if (!(choice instanceof Integer) || ((Integer)choice).intValue() != JOptionPane.OK_OPTION) return null;
+      String selected = (String)driver.getSelectedItem();
+      int row = device.getSelectedIndex();
+      if (selected == null || row < 0) {
+        validation.setText("Select an audio driver and input device.");
+        continue;
+      }
+      boolean portAudio = !selected.equals("Java Sound (Minim)");
+      if (audioSize.getSelectedIndex() < 0 || (portAudio && captureSize.getSelectedIndex() < 0)) {
+        validation.setText("Select an available buffer size.");
+        continue;
+      }
+      int audioFrames = (Integer)audioSize.getSelectedItem();
+      int captureFrames = portAudio ? (Integer)captureSize.getSelectedItem() : captureBufferSize;
+      int index = groups.get(selected).get(row);
+      String host = portAudio ? apis[index] : "Java Sound";
+      String selectedMode = portAudio && types[index] == 13 && mode.getSelectedIndex() == 1 ? "exclusive" : "shared";
+      return new InputChoice(portAudio, index, host, selectedMode, captureFrames, audioFrames);
+    }
+  } finally {
+    dialog.dispose();
+  }
+}
+
+public void dispose() {
+  WasapiCapture capture;
+  synchronized (audioLifecycleLock) {
+    audioDisposed = true;
+    capture = wasapiInput;
+    wasapiInput = null;
+  }
+  if (capture != null) {
+    try {
+      capture.close();
+    } catch (Exception error) {
+      System.err.println("Could not close WASAPI input: " + describeAudioError(error));
+    }
+  }
+  super.dispose();
+}
+
 void setupAudio() {
   surface.setVisible(false);
 
@@ -2026,15 +2275,43 @@ void setupAudio() {
       }
     }
 
-    int inputType = Minim.STEREO;
-
-    if (inputNames.size() > 0) {
-      String[] optionsArray = inputNames.toArray(new String[0]);
-      java.util.Arrays.sort(optionsArray, String.CASE_INSENSITIVE_ORDER);
-      String selected = promptForMixer(optionsArray);
-
-      if (selected != null) {
-        int idx = inputNames.indexOf(selected);
+    WasapiCapture candidate = null;
+    String unavailable = "";
+    try {
+      candidate = new WasapiCapture();
+    } catch (Exception | LinkageError error) {
+      unavailable = describeAudioError(error);
+      println("PortAudio unavailable: " + unavailable);
+    }
+    boolean accepted = false;
+    try {
+      String[] names = candidate == null ? new String[0] : candidate.allDevices();
+      String[] apis = candidate == null ? new String[0] : candidate.allHostApis();
+      int[] types = candidate == null ? new int[0] : candidate.allHostTypes();
+      InputChoice selected = promptForLiveInput(inputNames.toArray(new String[0]), names, apis, types, unavailable);
+      if (selected == null) {
+        isCancelled = true;
+        surface.setVisible(true);
+        return;
+      }
+      audioBufferSize = selected.audioFrames;
+      captureBufferSize = selected.captureFrames;
+      if (selected.portAudio) {
+        activeInputDriver = selected.driver;
+        activeWasapi = types[selected.deviceIndex] == 13;
+        wasapiMode = selected.mode;
+        candidate.openAny(selected.deviceIndex);
+        synchronized (audioLifecycleLock) {
+          if (audioDisposed) return;
+          actualAudioBufferSize = audioBufferSize;
+          audioSampleRate = candidate.sampleRate();
+          fft = new FFT(actualAudioBufferSize, audioSampleRate);
+          wasapiInput = candidate;
+          accepted = true;
+        }
+      } else {
+        int inputType = Minim.STEREO;
+        int idx = selected.deviceIndex;
         Mixer mixer = AudioSystem.getMixer(inputMixers.get(idx));
         minim.setInputMixer(mixer);
 
@@ -2069,18 +2346,29 @@ void setupAudio() {
         } else {
           inputType = Minim.MONO;
         }
-      } else {
-        isCancelled = true;
-        surface.setVisible(true);
-        return;
+        in = minim.getLineIn(inputType, audioBufferSize);
+        if (in == null) throw new IllegalStateException("Minim could not open the selected audio input.");
+        in.addListener(new BlockTimingListener());
+        actualAudioBufferSize = in.bufferSize();
+        audioSampleRate = in.sampleRate();
+        fft = new FFT(actualAudioBufferSize, audioSampleRate);
+      }
+    } catch (Exception | LinkageError error) {
+      String message = "Could not start audio input: " + describeAudioError(error);
+      println(message);
+      JOptionPane.showMessageDialog(null, message, "Audio input error", JOptionPane.ERROR_MESSAGE);
+      isCancelled = true;
+      surface.setVisible(true);
+      return;
+    } finally {
+      if (!accepted && candidate != null) {
+        try {
+          candidate.close();
+        } catch (Exception error) {
+          System.err.println("Could not close PortAudio: " + describeAudioError(error));
+        }
       }
     }
-
-    in = minim.getLineIn(inputType, audioBufferSize);
-    in.addListener(new BlockTimingListener());
-    actualAudioBufferSize = in.bufferSize();
-    audioSampleRate = in.sampleRate();
-    fft = new FFT(actualAudioBufferSize, audioSampleRate);
   } else {
     track = minim.loadFile(audioFileName, audioBufferSize);
     if (track != null) {
@@ -2143,17 +2431,4 @@ int promptForFormatSelection() {
   if (selectedValue.equals(options[0])) return 0;
   if (selectedValue.equals(options[1])) return 1;
   return -1;
-}
-
-String promptForMixer(String[] optionsArray) {
-  JOptionPane pane = new JOptionPane("Select Audio Input Device/Channel:", JOptionPane.QUESTION_MESSAGE, JOptionPane.DEFAULT_OPTION, null, null, null);
-  pane.setWantsInput(true);
-  pane.setSelectionValues(optionsArray);
-  pane.setInitialSelectionValue(optionsArray[0]);
-  JDialog dialog = pane.createDialog(null, "Input Selection");
-  dialog.setAlwaysOnTop(true);
-  dialog.setVisible(true);
-  Object selectedValue = pane.getInputValue();
-  if (selectedValue == JOptionPane.UNINITIALIZED_VALUE || selectedValue == null) return null;
-  return (String) selectedValue;
 }

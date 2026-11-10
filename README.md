@@ -129,8 +129,9 @@ startup value. Double-click an EQ fader to reset that band's sensitivity to
 
 ## Audio and FFT mapping
 
-The sketch uses Minim to play a selected audio file or capture a selected
-audio input. Each frame:
+The sketch uses Minim to play a selected audio file. For live input, the
+startup chooser lists Java Sound (Minim) and the input drivers detected by
+the optional Windows PortAudio backend. Each frame:
 
 1. The source buffer is sent to the FFT.
 2. Overall audio level drives base-image brightness and reveal-mode energy.
@@ -142,6 +143,156 @@ audio input. Each frame:
    -60 dB display floor. It applies an independent 0×–5× sensitivity to the
    corresponding mask.
 5. Solid and bloom mask layers are composited with additive blending.
+
+### PortAudio live input (Windows x64)
+
+File playback remains on Minim. To use PortAudio drivers, obtain a compatible
+JNA jar and a 64-bit Windows PortAudio DLL. The supplied DLL determines which
+host APIs are available: a non-ASIO build cannot list ASIO devices. An
+ASIO-enabled build is needed for ASIO; check the applicable Steinberg and
+binary redistribution licenses before distributing it. The local tests used
+Processing's JNA 5.19.1 and the PortAudio DLL from the `sounddevice` 0.5.6 Windows wheel.
+For example, the spike setup supplies
+`Spikes\PortAudioSpike\jna-lib\jna.jar` and
+`Spikes\PortAudioSpike\data\libportaudio64bit.dll`. Review the dependencies'
+licenses and provenance before redistribution. With Processing's bundled JDK:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Visualizer\setup-wasapi.ps1 `
+  -JnaJar Spikes\PortAudioSpike\jna-lib\jna.jar `
+  -PortAudioDll Spikes\PortAudioSpike\data\libportaudio64bit.dll
+```
+
+For local ASIO testing, use an ASIO-enabled DLL instead, such as the spike's
+`libportaudio64bit-asio.dll`. Re-run the setup script and re-export the
+application after changing the DLL. Supplying the DLL does not resolve its
+licensing or redistribution requirements.
+
+When selecting live input, use the **Audio driver** dropdown and then select an
+input device. It lists all input-capable host APIs exposed by the supplied
+PortAudio DLL, plus Java Sound (Minim). A device can appear under multiple
+drivers; support and latency are device-dependent. If PortAudio cannot load,
+the dialog reports why and still offers Java Sound when available. ASIO is
+shown only if the DLL supports it and a corresponding input driver is installed.
+
+The **Shared / Exclusive** dropdown applies to WASAPI only. Select the driver,
+device and mode before opening the input; to change them later, restart the
+application. The `liveInputBackend` parameter sets only the initial driver
+selection (`minim` or `wasapi`); no parameter edit is required to select
+another driver. The `wasapiMode` parameter controls the dropdown's
+initial selection (shared by default); a selection in the dialog applies only
+to the current run and does not change the file. Exclusive mode
+can prevent other applications from using the input and may fail, stall, or
+perform poorly with some devices or drivers. Test each device; an opening
+failure or capture error is reported without silently switching modes. Choose
+Shared on the next launch if exclusive mode is unsuitable. `captureBufferSize` controls the PortAudio read size in
+frames (default 256); `audioBufferSize` remains the power-of-two FFT window.
+The startup dropdowns offer powers of two from 32 to 8192 capture frames and
+32 to 65536 audio samples. If an existing `captureBufferSize` is not a power
+of two, select an available capture size in the dialog before starting PortAudio.
+Both can be changed in the live-input startup dialog; the parameter values are
+the initial defaults, and changes apply only to the current run. The capture
+size field is disabled for Java Sound, which uses the audio / FFT buffer size.
+File playback continues to use `audioBufferSize` from the parameters file.
+The two channels of stereo capture are averaged, as with Minim's mix buffer.
+The startup error dialog reports missing dependencies or a stream-open failure;
+there is no silent fallback to another backend. If polling shows no complete
+audio block for at least three seconds (or four block periods, whichever is
+longer), the control window reports a stall rather than continuing to show
+stale audio. A native call that itself hangs is not covered by this check.
+Run `setup-wasapi.ps1` again after updating the backend source.
+
+The generated `data\wasapi` directory must accompany the sketch or exported
+application; Processing exports its `data` directory. The exported sketch's
+loader was tested with its bundled JVM on the development machine; a GUI
+end-to-end test and clean-machine operation still need validation. PortAudio
+capture on macOS is not implemented. The control panel shows the selected
+WASAPI mode and reports PortAudio's
+input latency and capture timing, not end-to-end audio-to-display latency.
+FFT windowing, smoothing, graphics and display delay remain additional factors.
+
+For a repeatable capture-stability check (not end-to-end latency), run for
+example:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Visualizer\test-wasapi.ps1 `
+  -DeviceName "part of device name" -DurationSeconds 60 -CaptureFrames 256
+```
+
+The name fragment must uniquely identify a WASAPI input. The test reports
+sample rate, host-reported input latency, block interval and overflow count;
+it fails for capture errors, a stall or any overflow. Repeat under typical
+system load and with the buffer sizes to be compared. This test captures
+audio without running the visualization, so it does not replace testing the
+complete application under load.
+
+The test tool also accepts `-Mode exclusive` or `-Mode exclusive-polling`.
+The main visualizer's exclusive mode uses the non-polling option; polling is
+for driver investigation only. For example, on one MOTU M Series input it reported about 743 ms
+and stalled after a short burst in both modes; the cause remains unconfirmed.
+The same input ran in shared mode. Do not treat successful opening or a
+reported latency as proof of sustained capture or end-to-end performance.
+
+#### Windows export
+
+After running the WASAPI setup, export to a **new** directory:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Visualizer\export-windows.ps1 `
+  -OutputPath C:\Exports\MusicVisualizer-test
+```
+
+The parent directory must already exist. The script refuses to overwrite an
+existing destination, checks the WASAPI dependencies when enabled, verifies
+the exported launcher and data-file hashes, and records the dependency hashes
+in `wasapi-dependencies.json`. Use `-ProcessingExe` if Processing is installed
+elsewhere. A failed export may leave a partial directory; inspect it before
+removing it. Verify the exported app on another Windows x64 machine without
+Processing or Python installed, including file playback, Minim live input and
+WASAPI live input. The manifest identifies binaries; it does not verify their
+origin or grant redistribution rights.
+
+#### Measuring audio-to-display latency
+
+The reported WASAPI input latency is not an end-to-end measurement. Use a
+high-speed camera (preferably 240 fps or faster) to record both a stimulus
+indicator and the actual visualization display in the same shot:
+
+1. Feed a repeatable, short electrical audio pulse to the selected input and
+   simultaneously trigger an LED visible to the camera. Characterize any
+   delay between the LED and the actual signal at the input; avoid using
+   the computer's audio output as an unmeasured reference.
+2. Record the display and LED together. Use a stable, visible visualization
+   response, fixed camera exposure, and note the backend, device, sample
+   rate, `captureBufferSize`, `audioBufferSize`, FPS, attack/release settings
+   and display. Allow the application to warm up.
+3. For each of at least 20 spaced pulses, record the first video frame where
+   the LED changes and the first frame where the display visibly responds.
+   Include missed responses in your report; do not silently omit them. If
+   the indicator and screen are at different vertical positions, account
+   for camera rolling-shutter and display scanout effects.
+4. Save the observed pairs as CSV, with a header and integer frame numbers:
+
+   ```text
+   stimulusFrame,responseFrame
+   120,125
+   360,364
+   ```
+
+5. Run, for example:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File Visualizer\analyze-latency.ps1 `
+     -CsvPath C:\Measurements\latency.csv -FramesPerSecond 240
+   ```
+
+The script reports min, mean, nearest-rank p95 and max, and compares p95 and
+max to 25 ms and 50 ms with a one-frame quantization allowance. Those comparisons
+are **not certification**: source/LED timing, rolling shutter, scanout and
+detecting the first visible response add unquantified errors. At 240 fps one
+frame is about 4.17 ms; use a faster camera for tighter uncertainty. Repeat
+the same procedure for Minim and WASAPI, and report missed responses and
+capture overflows alongside the numbers.
 
 Each solid or bloom mask is composited using at most **10 image draws** per frame.
 This limits GPU work when audio multipliers are high. Intensities above 10 are
@@ -297,7 +448,8 @@ written back to the file.
 
 | Group | Settings | `parameters.txt` | Controls window |
 |---|---|---|---|
-| **File only** (need a restart) | `useFullScreen`, `canvasWidth`, `canvasHeight`, `visualizationDisplay`, `controlsWindowWidth`, `controlsWindowHeight`, `fps`, `audioBufferSize` | Yes | No |
+| **File only** (need a restart) | `useFullScreen`, `canvasWidth`, `canvasHeight`, `visualizationDisplay`, `controlsWindowWidth`, `controlsWindowHeight`, `fps` | Yes | No |
+| **File sets default, startup dialog can change it** | `liveInputBackend`, `wasapiMode`, `captureBufferSize`, `audioBufferSize` for live input; `audioBufferSize` for file playback comes only from the file | Yes | No |
 | **File sets the startup value, controls change it live** | **Audio Response** sliders: `initialAudioSensitivity` (**Audio Sensitivity**), `maxFftFrequency`, `frequencyMappingExponent`, `bandOverlap`, `audioBandMultiplier`, `audioBloomMultiplier`, `audioBaseIntensityScale`, `baseImageSilenceFloor` (**Silence Floor**), `audioAttackTimeMs`, `audioReleaseTimeMs`. **Spotlight** sliders: `spotlightEnergyMultiplier`, `spotlightMinimumRadius`, `spotlightMaximumRadius`, `spotlightEdgeFeatherProportion`, `spotlightMotionUpdateIntervalMs`, `spotlightBrownianStep`, `spotlightMotionSmoothingTimeMs`. **Area** sliders: `areaEnergyMultiplier`, `areaCycleDurationSeconds` | Yes | Yes, one slider each |
 | **File sets the startup value, controls change it live** (non-slider) | `colorBandMapping` (text box in **Audio Response**), `startRevealMode` (mode buttons or `M`), `spotlightIndependentMaskPositions` and `spotlightKeepCirclesInsideImage` (**Spotlight** buttons), `areaRevealStyle` (**Area** buttons) | Yes | Yes |
 | **Controls window only** | **Base Image** slider and the per-colour **Solid** and **Bloom** sliders in **Mask Intensity**; per-mask **Audio Response** EQ sensitivities | No; the Base Image slider starts at `baseImageSilenceFloor`, colour sliders start at 0, and EQ sensitivities start at 1.0× | Yes |
@@ -332,7 +484,10 @@ above).
 
 | Setting | Accepted values | What it changes |
 |---|---|---|
-| `audioBufferSize` | Power of two from 32-65536 | Number of audio samples used by the input buffer and FFT. Larger buffers provide finer frequency spacing but respond less immediately; smaller buffers respond faster but give coarser frequency spacing. |
+| `liveInputBackend` | `minim` or `wasapi` | Initial driver selection in the live-input chooser. Other available drivers can be selected there; PortAudio requires Windows x64 and setup above. File playback always uses Minim. |
+| `wasapiMode` | `shared` or `exclusive` | Default WASAPI mode shown in the startup dialog; the selection can be changed for the current run. Ignored for Minim and file playback. Defaults to `shared`. |
+| `captureBufferSize` | 32-8192 frames | Default PortAudio capture read size; live-input startup choices are powers of two. A configured non-power-of-two requires an explicit startup selection. Independent of the FFT window and not used by Minim. |
+| `audioBufferSize` | Power of two from 32-65536 | Default FFT-window size; can be changed at live-input startup. Also the Minim input buffer size and the file-playback buffer size. Larger windows provide finer frequency spacing but respond less immediately. |
 | `colorBandMapping` | Unique initials from `B`, `C`, `R`, `O`, `Y`, `G`, `M` | Chooses which colour masks are active and assigns them from the lowest to highest FFT band, left to right. For example, `BCROY` assigns blue to the lowest band and yellow to the highest. A shorter mapping uses fewer masks; all masks are preloaded. Editable in **Controls > Audio Response** by entering initials and pressing Enter. |
 | `maxFftFrequency` | 1-192000 Hz | Upper frequency limit analyzed for the colour bands. Lower it to focus the mapping on bass or midrange. Frequencies available also depend on the selected audio source and its sample rate. |
 | `frequencyMappingExponent` | 0.1-20 | Shapes how the FFT range is divided among the ordered masks. `1` is linear; larger values pack more band boundaries into the low-frequency end, giving lower frequencies more individual colour bands. Smaller values shift more band resolution toward higher frequencies. |
