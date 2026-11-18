@@ -682,10 +682,10 @@ void drawVisualization() {
   float releaseAmount = audioReleaseTimeMs <= 0.0 ? 1.0 : 1.0 - exp(-elapsedMs / audioReleaseTimeMs);
 
   if (solidSliders != null && bloomSliders != null) {
+    int maxBin = isAudioReady && fft != null ? getMaxAnalysisBin() : 0;
     for (int i = 0; i < colorNames.length; i++) {
       float bandEnergy = 0.0;
       if (isAudioReady && fft != null) {
-        int maxBin = getMaxAnalysisBin();
         int startBin = getBandStartBin(i, maxBin);
         int endBin = getBandEndBin(i, maxBin);
 
@@ -1150,6 +1150,8 @@ class ControlsWindow extends PApplet {
   Button[] areaStyleButtons;
   BandEqualizerControl[] equalizerControls;
   Slider editingSlider;
+  Slider[] visualSliderCache;
+  Slider[] audioResponseSliderCache;
 
   void settings() {
     size(controlsWindowWidth, controlsWindowHeight, P2D);
@@ -1215,6 +1217,7 @@ class ControlsWindow extends PApplet {
       new Button("CENTER GLOW"),
       new Button("TRAIL")
     };
+    rebuildSliderCaches();
   }
 
   void draw() {
@@ -1247,7 +1250,23 @@ class ControlsWindow extends PApplet {
       bloomSliders[i].val = bloomValue;
     }
     rebuildEqualizerControls();
+    rebuildSliderCaches();
     editingSlider = null;
+  }
+
+  void rebuildSliderCaches() {
+    visualSliderCache = new Slider[1 + colorNames.length * 2];
+    visualSliderCache[0] = baseSlider;
+    for (int i = 0; i < colorNames.length; i++) {
+      visualSliderCache[i * 2 + 1] = solidSliders[i];
+      visualSliderCache[i * 2 + 2] = bloomSliders[i];
+    }
+
+    audioResponseSliderCache = new Slider[audioResponseSliders.length + 1];
+    audioResponseSliderCache[0] = audioSensSlider;
+    for (int i = 0; i < audioResponseSliders.length; i++) {
+      audioResponseSliderCache[i + 1] = audioResponseSliders[i];
+    }
   }
 
   void rebuildEqualizerControls() {
@@ -1455,21 +1474,12 @@ class ControlsWindow extends PApplet {
   }
 
   Slider[] getAudioResponseSliders() {
-    Slider[] sliders = new Slider[audioResponseSliders.length + 1];
-    sliders[0] = audioSensSlider;
-    for (int i = 0; i < audioResponseSliders.length; i++) sliders[i + 1] = audioResponseSliders[i];
-    return sliders;
+    return audioResponseSliderCache;
   }
 
   Slider[] getActiveSliders() {
     if (activeSection == 0) {
-      Slider[] visualSliders = new Slider[1 + colorNames.length * 2];
-      visualSliders[0] = baseSlider;
-      for (int i = 0; i < colorNames.length; i++) {
-        visualSliders[i * 2 + 1] = solidSliders[i];
-        visualSliders[i * 2 + 2] = bloomSliders[i];
-      }
-      return visualSliders;
+      return visualSliderCache;
     }
     if (activeSection == 1) return getAudioResponseSliders();
     if (activeSection == 2) return spotlightRevealSliders;
