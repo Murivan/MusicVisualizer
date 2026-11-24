@@ -4,6 +4,8 @@ A Processing sketch that visualizes an audio file or live audio input over a
 window-image composition. The visualizer renders the output fullscreen and
 opens a separate, resizable control window for live tuning.
 
+The original stained glass image is licensed to the parish of Heilig Kreuz, Detmold (Germany) (https://www.pv-lippe-detmold.de/kirchorte/heilig-kreuz-detmold/) and has been taken by © Ansgar Hoffmann 2023 (https://hoffmannfoto.de/)
+
 ## Features
 
 - Audio-file or live-input selection at startup.
